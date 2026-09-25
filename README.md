@@ -1,144 +1,166 @@
 # Athanor
 
-Athanor is a fault-tolerant distributed object store. Independent nodes replicate objects with a Dynamo-style quorum, detect failure with SWIM gossip, and repair corruption themselves. The dashboard is there so a judge can see every replica, kill a node, and watch a bad copy heal.
+Athanor is a fault-tolerant distributed object store. Independent nodes replicate objects with a Dynamo-style quorum, detect failure with SWIM gossip, and repair corruption themselves. The dashboard lets you see every replica, kill a node, and watch a bad copy heal.
 
-The design document is [PLAN.md](PLAN.md). That document uses the working title Vault. This repository is that system. The node binary is `vault-node`.
+The design document is [PLAN.md](PLAN.md). It uses the working title Vault, and the node binary is still called `vault-node`. Every phase in the plan (A to F) is built. The one exception is the optional Electron shell, which is skipped.
 
-**This commit is the project layout, not the storage engine.** Health and cluster endpoints answer. Put, Get, Delete, gossip, replication, and repair do not. Build order is Phase A through Phase E below. Do not cut the engine to finish a desktop shell.
+## Run it
 
-## What the MVP stores
+**With Docker** (five nodes, each with its own disk):
 
-- Multi-node Put / Get / Delete
-- Configurable N / W / R, default **3 / 2 / 2**
-- SWIM failure detection (`hashicorp/memberlist`)
-- Quorum reads and writes, with sloppy quorum and a simple hinted handoff
-- SHA-256 on every replica, checked on read and on a periodic scrub
-- One `Repair(key)` path shared by read-repair, scrub, and hint replay
-- Rate-limited rebalance when a node joins or leaves
-- Docker Compose topology of 5 nodes, plus kill / start / corrupt controls
-- Browser dashboard: cluster health, per-object replica map, live repair log
+```bash
+docker compose -f deploy/docker-compose.yml up --build
+```
 
-Not in the MVP: Raft (or any central metadata cluster), Merkle anti-entropy, Reed-Solomon erasure coding, S3 compatibility, Electron, and a chaos loop that runs on its own. The metrics card will say the honest cost of the default policy: **3× storage**, not an erasure-coded figure we did not build.
+Open **http://localhost:8081/app**. Every node serves the dashboard and the landing page, so ports 8081 to 8085 all work, and any node can coordinate any request.
+
+**Without Docker** (five local processes, same ports):
+
+```bash
+make ui-embed        # build the dashboard into the binary (needs Node.js 20+)
+scripts/local-cluster.sh
+```
+
+`CLEAN=1` wipes `./data/local` first. `NODES=6` starts a sixth node too. Stopping the script with Ctrl-C stops every node.
+
+**Dashboard development:** run `cd ui && npm install && npm run dev`, then open http://localhost:5173/app. The dev server talks to `http://localhost:8081` by default. The plug icon in the top bar switches to another node.
+
+**One process:** `make run` starts a single node with N=W=R=1. A write cannot wait for replicas that don't exist.
+
+Requirements: Go 1.25+, Node.js 20+ for the UI, and Docker for compose.
+
+## The 90-second demo
+
+The dashboard's **Demo run** card ticks each step off as the matching event appears in the cluster log.
+
+1. **Open the dashboard.** Five nodes are alive, and the Nodes page draws the ring from live vnode positions.
+2. **Upload a file** (Objects → Upload). The write returns after W=2 acks. The row shows a replica dot on each of its three owners.
+3. **Kill a node** (Nodes → Stop). Peers first mark it *suspect* after missed direct probes, and SWIM then declares it *dead*. Its card is hatched and red.
+4. **Write and read while it is down.** The write lands on the next healthy node as a **hint**, shown as a yellow dot. The read succeeds with R=2 and is marked *degraded*.
+5. **Corrupt a replica** (row menu → flip a byte on a node). The dot pulses red: flipped, not yet caught.
+6. **Watch it heal.** Press ▶ on the Scrubber dial, or read the object. The log shows `checksum mismatch on nodeX → healed from nodeY`.
+7. **Start the node again.** It rejoins through its seeds, the hint replays, and its dot turns solid.
+8. **Drag W from 2 to 3** on the Durability page. The change is gossiped to every node, and the next upload waits for three acks.
+
+To watch rebalance, start a sixth node: `docker compose -f deploy/docker-compose.yml --profile scale up -d node6`, or `NODES=6` with the local script. The log shows lines like `rebalance: migrate docs/PLAN.md from node1 → node6` and `dropped … owners are now [...]`.
 
 ## Architecture
 
-Any node can coordinate a client call. Placement is a consistent-hash ring, computed locally from gossiped membership. There is no cluster-wide object index.
-
 ```
-browser dashboard
-        │  HTTP
+browser (landing page at /, dashboard at /app)
+        │  HTTP, any node
         ▼
-   any vault-node          stateless coordinator
-        │  gRPC: Replicate, GetReplica, Repair, Hint, RingSnapshot
+   vault-node  ── stateless coordinator for client calls
+        │  gRPC: Replicate, GetReplica, Hint, Repair, ListReplicas, Events, Scrub, Corrupt, RingSnapshot
         ▼
  node1  node2  node3  node4  node5
- local disk + bbolt index
- memberlist gossip (SWIM)
+ blobs on disk + bbolt index        memberlist (SWIM) gossip: membership, ring version, N/W/R
 ```
 
-An object key is hashed with SHA-256. The ring walks clockwise to N distinct physical nodes. That preference list is the replica set. Versions are a per-object last-writer-wins integer (node id mixed with a counter), not a version vector. Metadata consistency means a gossiped ring version: stale ring versions are ignored.
+- **Placement.** A consistent-hash ring with 64 virtual nodes per node. A key's SHA-256 is its ring position. Walking clockwise to N distinct nodes gives the preference list, and the nodes after that are sloppy-quorum fallbacks. Every node computes this locally from gossiped membership. There is no central index and no Raft.
+- **Writes.** Every write gets a hybrid-logical-clock version. The coordinator sends it to all N owners in parallel and answers `201` after W acks. A `503` means quorum was not reached. If an owner is unreachable, the next healthy node on the ring stores a **hint** for it. Deletes are tombstone writes, so a stale replica cannot resurrect a key.
+- **Reads.** Ask the N owners, or a fallback for any owner that is down. Wait for R answers and return the newest version whose bytes verify. If an owner answered missing, stale, or corrupt, read-repair starts.
+- **One repair path.** Read-repair, the scrubber, and hint replay all call `Repair(key)`. It asks every reachable member what it holds and picks the newest version with a matching checksum. It re-verifies the winner's bytes, then pushes them to every live owner that lacks them.
+- **Failure detection.** memberlist runs SWIM: probes, indirect probes through other members, suspicion, and gossiped death. *Suspect* in the UI is this node's own observation: a peer missed direct probes but gossip hasn't declared it dead. A dead node stays in the ring, covered by hints, for `--reap-after` (2 minutes). After that it is removed and its keys are re-replicated.
+- **Rebalance.** When the ring version changes, and every 30 seconds as anti-entropy, each node checks the keys it holds. It copies them to any owner that lacks them, limited by a token bucket. It drops its own copy only after every owner confirms it holds the same or a newer version.
+- **Integrity.** Every replica is stored with its SHA-256 and re-hashed on every read and on every scrub pass (`--scrub-interval`, 30 seconds). Payloads are written to a temporary file, fsynced, and renamed into place before the index points at them.
+- **Metadata consistency.** The ring version and member set are gossiped in node metadata. A node adopts a higher version for the same member set and ignores stale ones. The N/W/R policy also travels by gossip, and the newest version wins.
 
-On disk, each node keeps:
+### Requirement → where it lives
+
+| Requirement | Technique | Code |
+| --- | --- | --- |
+| Storage | Blobs on disk + bbolt index (key, version, checksum, size, hint target) | `internal/store` |
+| Replication, retrieval | Preference list of N, write W, read R | `internal/replica` |
+| Concurrent reads and writes | Hybrid-logical-clock versions, last writer wins, ties broken by origin | `internal/replica/clock.go`, `store.Newer` |
+| Node failures | SWIM via memberlist, plus local suspicion from direct probes | `internal/membership` |
+| Partial partitions | Sloppy quorum + hinted handoff; SWIM indirect probes keep partitioned nodes alive | `internal/replica`, `internal/membership/transport.go` |
+| Corruption, integrity | SHA-256 per replica, verified on read and by the scrubber | `internal/store`, `internal/repair` |
+| Replica inconsistency, automatic repair | One `Repair(key)` for read-repair, scrub, and hint replay | `internal/repair/repair.go` |
+| Background rebalancing | "Keys I should hold" pass, rate-limited | `internal/repair/background.go` |
+| Metadata consistency | Gossiped ring version + member-set digest | `internal/membership`, `internal/ring` |
+| Availability / overhead | Bounded vnodes, a token bucket for background copies, 3× storage stated plainly | dashboard overhead card |
+
+On-disk layout per node:
 
 ```
-data/<first2>/<key>     payload
-index.db                bbolt: object meta + hinted-handoff queue
+blobs/<first2>/<sha256(key)>.<version>           primary replica
+hints/<target>/<first2>/<sha256(key)>.<version>  hinted handoff waiting for <target>
+index.db                                         bbolt: object meta + hint queue
 ```
+
+## HTTP API
+
+Any node answers. Keys may contain slashes.
+
+| Method | Path | Behavior |
+| --- | --- | --- |
+| PUT | `/v1/objects/{key}` | Write. `201` after W acks, with the acks, hints, and preference list. `503` without quorum. |
+| GET | `/v1/objects/{key}` | Read R replicas. The body is the newest verified version. `X-Athanor-Version`, `-Checksum`, `-Replicas`, and `-Degraded` describe the read. |
+| DELETE | `/v1/objects/{key}` | Tombstone write, same quorum as PUT. |
+| GET | `/v1/admin/health` | This process. Answers while the node is stopped. |
+| GET | `/v1/admin/cluster` | Gossiped members, ring version, and partitions. |
+| GET | `/v1/admin/overview` | Everything the dashboard polls: members, the replica map, metrics, scrub state. |
+| GET | `/v1/admin/objects` | Replica map + metrics. |
+| GET | `/v1/admin/ring?key=` | Vnode positions, plus a key's preference list and fallbacks. |
+| GET | `/v1/admin/events` | Merged event log of every reachable node. |
+| GET, PUT | `/v1/admin/config` | Cluster N/W/R, for example `{"n":3,"w":3,"r":2}`. Gossiped to every node. |
+| POST | `/v1/admin/scrub` | Scrub every reachable node now. |
+| POST | `/v1/admin/repair/{key}` | Run `Repair(key)` now. |
+| POST | `/v1/admin/corrupt` | Flip one byte of a replica: `{"key":"…","node":"node3"}`. |
+| POST | `/v1/admin/nodes/{id}/stop` · `/start` | Crash-stop or restart any node, through that node's own admin API. |
+| POST, DELETE | `/v1/admin/partitions` | Cut the link `{"a":"node1","b":"node3"}`, or heal every partition. |
+
+```bash
+curl -X PUT --data-binary @report.pdf -H 'Content-Type: application/pdf' localhost:8081/v1/objects/reports/q3.pdf
+curl -D - localhost:8083/v1/objects/reports/q3.pdf -o /dev/null
+```
+
+Peer RPC is in [proto/node.proto](proto/node.proto). The generated Go is committed, and `make proto` regenerates it.
 
 ## Repository layout
 
 ```
-cmd/vault-node/          node process
-internal/store/          local blobs, index, hints
+cmd/vault-node/          process entry point and flags
+internal/store/          blobs, bbolt index, hints, tombstones
 internal/ring/           consistent-hash placement
-internal/replica/        N/W/R policy and the coordinator
-internal/membership/     Alive / Suspect / Dead view
-internal/repair/         Repair, scrub, rebalance
-internal/api/            HTTP now, gRPC from Phase B
-proto/node.proto         peer RPC contract
-ui/                      Vite + React control plane
-deploy/                  Dockerfile and 5-node compose file
-PLAN.md                  design and phase order
+internal/replica/        quorum policy, HLC versions, the coordinator
+internal/membership/     memberlist wrapper, suspicion, partition filter
+internal/repair/         Repair, scrubber, hint replay, rebalance, token bucket
+internal/node/           wires a node together; gRPC server and clients; admin views
+internal/api/            HTTP API; nodepb/ is generated gRPC
+internal/webui/          embeds the built UI (make ui-embed)
+ui/                      Vite + React: landing page (/) and dashboard (/app)
+deploy/                  Dockerfile and compose topology
+scripts/local-cluster.sh five nodes without Docker
 ```
 
-## Requirements
+## Tests
 
-- Go 1.23 or newer
-- Node.js 20 or newer, for the dashboard
-- Docker, for the five-node topology
-
-## Run the scaffold
-
-One process:
-
-```powershell
-go run ./cmd/vault-node --id node1 --http :8080 --data ./data
-curl http://localhost:8080/v1/admin/health
+```bash
+go test -race ./...
 ```
 
-Five processes:
+Unit tests cover the store, ring, quorum coordinator, and repair jobs (on an in-process cluster). `internal/node` starts five real nodes in one test binary, with memberlist gossip and gRPC on loopback. It checks five things:
 
-```powershell
-docker compose -f deploy/docker-compose.yml up --build
-curl http://localhost:8081/v1/admin/health
-```
+- A put on one node is read from another.
+- A stopped node is declared dead, a hint is parked for it, and the hint replays when it returns.
+- A corrupt replica heals through both the scrubber and read-repair.
+- N/W/R changes reach every node by gossip.
+- A partial partition does not get a node declared dead.
 
-Host ports are 8081 through 8085, one per node. Inside the network every node listens on 8080 for HTTP and records 9090 for gRPC. gRPC is not bound yet.
+CI runs these tests and builds the UI. The Docker image is not built in CI yet.
 
-Dashboard:
+## Honest limits
 
-```powershell
-cd ui
-npm install
-npm run dev
-```
-
-Open `http://localhost:5173`. The Node field defaults to `http://localhost:8081`. Cluster, Objects, and Events are the three pages from the demo. Kill, start, and corrupt are visible and disabled until Phase C.
-
-`make build`, `make test`, `make run`, `make compose`, and `make ui` wrap the same commands when `make` is installed.
-
-## HTTP
-
-| Method | Path | Scaffold behavior |
-| --- | --- | --- |
-| GET | `/v1/admin/health` | 200. This process is up. `mode` is `scaffold`. |
-| GET | `/v1/admin/cluster` | 200. This process only. `implemented` is false. |
-| GET | `/v1/admin/events` | 200. Empty log. `implemented` is false. |
-| PUT, GET, DELETE | `/v1/objects/{key}` | 501 until Phase A. |
-
-Keys may contain slashes. The coordinator does not exist yet, so none of these routes touch disk.
-
-Responses include `Access-Control-Allow-Origin: *` so the Vite app can call a node on another port. That is for the local demo, not a locked-down deployment.
-
-## Peer RPC
-
-`proto/node.proto` defines `Replicate`, `GetReplica`, `Repair`, `Hint`, and `RingSnapshot`. Generate Go stubs in Phase B. Nothing calls them today.
-
-## Target demo (about 90 seconds)
-
-This is the judging script from the plan. It works only after Phases A–E.
-
-1. Open the dashboard. Five nodes are green. The ring is drawn from live membership.
-2. Upload `report.pdf`. The object row shows replica dots on three nodes.
-3. Kill node 2. Its card goes red. Download still succeeds because R=2.
-4. Corrupt node 3's file. The next get or scrub logs a checksum mismatch, then a repair from a healthy replica.
-5. Start node 2. Hint replay or rebalance runs. Its dot goes green again.
-6. If the Phase F slider is in, move W from 2 to 3. The next upload waits for three acks.
-
-Success is narrower than the full plan: a judge can upload a file, kill a node, still read it, watch a corrupt replica heal, and see where every copy lives.
-
-## Build order
-
-| Phase | What lands | Exit test |
-| --- | --- | --- |
-| A. Single node | Put / Get / Delete, checksum, bbolt, HTTP | `curl` a file on one process |
-| B. Quorum | memberlist, ring, gRPC replicate, N/W/R, compose | Put on node 1, get from node 3, bytes on 3 disks |
-| C. Faults | Dead marking, hints, read-repair, scrub, hint replay, kill / corrupt | Stop a container and still get; corrupt a file and watch it heal |
-| D. Rebalance | Rate-limited move on join or leave | New node receives keys; old node drops extras |
-| E. Dashboard | Live node cards, replica dots, event log, chaos buttons | The demo script above |
-| F. Polish | N/W/R slider, overhead card, this demo kept honest | Optional Electron only after the demo works |
-
-If time runs out, keep the local store, the ring, quorum put/get, failure detection, one repair function, and the kill-node demo. Cut rebalance completeness, hint elegance, the slider, and animation before cutting the engine.
+- **No authentication or TLS.** Anyone who can reach a node can stop nodes and flip bytes. This is a local demo cluster.
+- **Storage cost is 3× by default.** Reed–Solomon erasure coding would cost about 1.5× for similar fault tolerance. It is not built.
+- **Last writer wins.** Concurrent writes to one key keep the one with the higher hybrid-clock version. There are no version vectors and no siblings.
+- **Tombstones are kept forever.** There is no tombstone garbage collection.
+- **Event logs are in memory,** 1,000 lines per node, and start empty after a process restart.
+- **Stop and partition are simulated in the node.** Stop turns off gossip and peer RPC but leaves the admin API up, so the dashboard can start the node again. Partition drops gossip packets and refuses peer RPC between two nodes. `docker compose stop` is a real crash.
+- **Some work scales with the whole cluster.** Rebalance compares full inventories, and repair asks every reachable member. That is fine for a handful of nodes and thousands of keys, but it is not built for millions.
+- **Objects are held in memory per request,** up to 64 MiB.
 
 ## Locked choices
 
@@ -146,4 +168,4 @@ If time runs out, keep the local store, the ring, quorum put/get, failure detect
 - Docker Compose, five nodes
 - Last-writer-wins versions, not version vectors
 - Checksums plus a "keys I should hold" scan, not Merkle trees
-- React in the browser. Electron is optional and last
+- React in the browser; no Electron

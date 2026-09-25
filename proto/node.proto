@@ -1,17 +1,28 @@
 syntax = "proto3";
 
-// Node-to-node RPC. Code generation is a Phase B step; nothing imports
-// generated stubs yet.
+// Node-to-node RPC. Generated Go lives in internal/api/nodepb; regenerate
+// with `make proto` after editing this file.
 package athanor.v1;
 
 option go_package = "github.com/Arjun-Walia/Athanor/internal/api/nodepb";
 
 service Node {
+  // Store a primary replica if it is newer than (or heals) the local copy.
   rpc Replicate(ReplicateRequest) returns (ReplicateResponse);
+  // Read a replica. Falls back to a parked hint when no primary copy exists.
   rpc GetReplica(GetReplicaRequest) returns (GetReplicaResponse);
+  // Run the one Repair(key) path with this node as the repair coordinator.
   rpc Repair(RepairRequest) returns (RepairResponse);
+  // Park a write for a preferred node that is unreachable (sloppy quorum).
   rpc Hint(HintRequest) returns (HintResponse);
+  // This node's gossiped membership and ring version.
   rpc RingSnapshot(RingSnapshotRequest) returns (RingSnapshotResponse);
+
+  // Control-plane helpers used by rebalance and the dashboard.
+  rpc ListReplicas(ListReplicasRequest) returns (ListReplicasResponse);
+  rpc Events(EventsRequest) returns (EventsResponse);
+  rpc Corrupt(CorruptRequest) returns (CorruptResponse);
+  rpc Scrub(ScrubRequest) returns (ScrubResponse);
 }
 
 message ObjectMeta {
@@ -21,35 +32,49 @@ message ObjectMeta {
   uint64 size = 4;
   string origin = 5;
   string hinted_for = 6;
+  bool deleted = 7;
+  int64 written_unix_ms = 8;
+  string content_type = 9;
 }
 
 message ReplicateRequest {
   ObjectMeta meta = 1;
   bytes body = 2;
+  string reason = 3;
 }
 
 message ReplicateResponse {
   bool stored = 1;
+  // What the replica holds after the call. An ack means current >= meta.
+  ObjectMeta current = 2;
 }
 
 message GetReplicaRequest {
   string key = 1;
+  bool with_body = 2;
 }
 
 message GetReplicaResponse {
   bool found = 1;
   ObjectMeta meta = 2;
   bytes body = 3;
+  // The stored bytes no longer match the stored SHA-256.
+  bool corrupt = 4;
+  // The copy is a parked hint, not a primary replica.
+  bool hinted = 5;
 }
 
 message RepairRequest {
   string key = 1;
+  string reason = 2;
 }
 
 message RepairResponse {
   uint64 winner_version = 1;
   repeated string pushed = 2;
   repeated string dropped = 3;
+  repeated string corrupt = 4;
+  int64 took_micros = 5;
 }
 
 message HintRequest {
@@ -69,9 +94,60 @@ message Member {
   string addr = 2;
   string status = 3;
   uint64 ring_version = 4;
+  string grpc_addr = 5;
+  string http_addr = 6;
+  string public_url = 7;
+  bool in_ring = 8;
 }
 
 message RingSnapshotResponse {
   uint64 ring_version = 1;
   repeated Member members = 2;
+  string ring_digest = 3;
+}
+
+message ListReplicasRequest {}
+
+message ListReplicasResponse {
+  repeated ObjectMeta objects = 1;
+  // Parked hints. hinted_for names the node each hint is waiting for.
+  repeated ObjectMeta hints = 2;
+  // Keys whose bytes an operator flipped and no check has caught yet.
+  repeated string tampered = 3;
+  uint64 bytes = 4;
+}
+
+message EventsRequest {
+  uint64 since = 1;
+  uint32 limit = 2;
+}
+
+message Event {
+  uint64 seq = 1;
+  int64 at_unix_ms = 2;
+  string node = 3;
+  string kind = 4;
+  string level = 5;
+  string key = 6;
+  string message = 7;
+  map<string, string> fields = 8;
+}
+
+message EventsResponse {
+  repeated Event events = 1;
+}
+
+message CorruptRequest {
+  string key = 1;
+}
+
+message CorruptResponse {
+  bool corrupted = 1;
+}
+
+message ScrubRequest {}
+
+message ScrubResponse {
+  uint64 checked = 1;
+  uint64 mismatches = 2;
 }
