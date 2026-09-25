@@ -137,6 +137,7 @@ Any node answers. Keys may contain slashes. Every response carries `X-Athanor-No
 | GET | `/v1/admin/objects` | Replica map + metrics. |
 | GET | `/v1/admin/ring?key=` | Vnode positions, plus a key's preference list and fallbacks. |
 | GET | `/v1/admin/events` | Merged event log of every reachable node. |
+| GET | `/v1/admin/events/stream` | The same log as server-sent events: a `snapshot` first, then a `log` event per new line. The dashboard uses this and falls back to polling. |
 | GET, PUT | `/v1/admin/config` | Cluster N/W/R, for example `{"n":3,"w":3,"r":2}`. Gossiped to every node and persisted on each. |
 | POST | `/v1/admin/scrub` | Scrub every reachable node now. Reports replicas and hints checked. |
 | POST | `/v1/admin/repair/{key}` | Run `Repair(key)` now. |
@@ -194,7 +195,7 @@ CI runs vet and the race tests, boots a node and round-trips an object, builds t
 - **Storage cost is 3× by default.** Reed–Solomon erasure coding would cost about 1.5× for similar fault tolerance. It is not built.
 - **Last writer wins.** Concurrent writes to one key keep the one with the higher hybrid-clock version. There are no version vectors and no siblings.
 - **Tombstones are kept forever.** There is no tombstone garbage collection.
-- **Event logs are in memory,** 1,000 lines per node, and start empty after a process restart. The policy and clock survive; the log does not.
+- **Event logs are in memory,** 1,000 lines per node, and start empty after a process restart. The policy and clock survive; the log does not. The stream is a one-second poll on the server side, merged across nodes; it is live to the eye, not to the microsecond.
 - **Stop and partition are simulated in the node.** Stop turns off gossip and peer RPC but leaves the admin API up, so the dashboard can start the node again. Partition drops gossip packets and refuses peer RPC between two nodes. `docker compose stop` is a real crash.
 - **Some work scales with the whole cluster.** Rebalance compares full inventories, and repair asks every reachable member. That is fine for a handful of nodes and thousands of keys, but it is not built for millions.
 - **Objects are held in memory per request,** up to 64 MiB, and at most 32 at a time per node.

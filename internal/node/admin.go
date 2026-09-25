@@ -18,6 +18,9 @@ import (
 // ErrStopped is returned by operations that need gossip and peer RPC.
 var ErrStopped = errors.New("node is stopped")
 
+// Event is one line of the merged cluster log, as ClusterEvents returns it.
+type Event = events.Event
+
 // NodeView is one member as the dashboard shows it.
 type NodeView struct {
 	membership.Member

@@ -20,8 +20,11 @@ var dist embed.FS
 // policy is the content security policy for the pages. The dashboard talks
 // to other nodes' public URLs from the browser, so connections are open;
 // everything else must come from the node that served the page.
-const policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
-	"img-src 'self' data: blob:; font-src 'self' data:; connect-src *; frame-ancestors 'none'; base-uri 'self'"
+// Cloudflare injects its Web Analytics beacon into pages served through
+// the tunnel; without the allowance every page load logs a CSP violation.
+const policy = "default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; " +
+	"style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; " +
+	"connect-src *; frame-ancestors 'none'; base-uri 'self'"
 
 // Handler serves the UI, falling back to index.html for client-side routes
 // such as /app. ok is false when the binary was built without a UI.

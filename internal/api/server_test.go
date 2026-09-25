@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bufio"
 	"encoding/json"
 	"io"
 	"net"
@@ -9,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Arjun-Walia/Athanor/internal/node"
 	"github.com/Arjun-Walia/Athanor/internal/replica"
@@ -259,5 +261,62 @@ func TestInflightLimitAnswers503WithRetryAfter(t *testing.T) {
 	_, raw = do(t, http.MethodGet, srv.URL+"/v1/admin/health", "")
 	if decode(t, raw)["max_inflight"] != float64(1) {
 		t.Fatalf("health max_inflight = %s", raw)
+	}
+}
+
+// The stream opens with a snapshot and then pushes lines as they happen.
+func TestEventStreamPushesNewLines(t *testing.T) {
+	_, srv := single(t)
+	StreamInterval = 100 * time.Millisecond
+	t.Cleanup(func() { StreamInterval = time.Second })
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/v1/admin/events/stream", nil)
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		t.Fatalf("content type = %q", ct)
+	}
+	rd := bufio.NewReader(resp.Body)
+	next := func(want string) []map[string]any {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			line, err := rd.ReadString('\n')
+			if err != nil {
+				t.Fatalf("stream ended: %v", err)
+			}
+			if strings.TrimSpace(line) != "event: "+want {
+				continue
+			}
+			data, err := rd.ReadString('\n')
+			if err != nil {
+				t.Fatal(err)
+			}
+			var evs []map[string]any
+			if err := json.Unmarshal([]byte(strings.TrimPrefix(strings.TrimSpace(data), "data: ")), &evs); err != nil {
+				t.Fatalf("decode %q: %v", data, err)
+			}
+			return evs
+		}
+		t.Fatalf("no %s event within 5s", want)
+		return nil
+	}
+	if snap := next("snapshot"); len(snap) == 0 {
+		t.Fatal("snapshot should carry the boot events")
+	}
+	do(t, http.MethodPut, srv.URL+"/v1/objects/streamed", "hello")
+	found := false
+	for i := 0; i < 5 && !found; i++ {
+		for _, ev := range next("log") {
+			if ev["kind"] == "write" && ev["key"] == "streamed" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("the write never arrived on the stream")
 	}
 }

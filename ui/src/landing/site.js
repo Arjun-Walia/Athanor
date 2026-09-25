@@ -8,6 +8,7 @@ export const DASHBOARD_PATH = "/app";
 export const SECTIONS = [
   ["how", "How"],
   ["break", "Break it"],
+  ["handles", "Handles"],
   ["quorum", "Quorum"],
   ["run", "Run"],
 ];

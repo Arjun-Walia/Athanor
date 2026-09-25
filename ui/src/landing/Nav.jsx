@@ -47,8 +47,8 @@ export default function Nav() {
   return (
     <header className="ln-nav" ref={headerRef}>
       <div className="ln-nav-bar">
-        <a className="ln-brand" href="#top" aria-label="Athanor, back to top">
-          <IconBrand size="1.15em" className="ln-brand-glyph" />
+        <a className="brand ln-brand" href="#top" aria-label="Athanor, back to top">
+          <IconBrand size="1.15em" className="brand-glyph" />
           <span>Athanor</span>
         </a>
 

@@ -6,8 +6,9 @@ vault-node. What was added after the plan was written: crash-recovery sweep
 and directory fsync in the store, one retry before a write falls back to a
 hint, gRPC keepalives, seed rejoin after a full cut, persisted N/W/R policy
 and clock, a readiness probe and an in-flight cap on the HTTP API, a
-gateway overlay for one-origin deployments, and installers for the desktop
-app on macOS, Windows and Linux. See README.md for where each lives.
+gateway overlay for one-origin deployments, installers for the desktop
+app on macOS, Windows and Linux, and the SSE event stream this plan asks
+for in section 5. See README.md for where each lives.
 
 Updated plan: keep the Dynamo/SWIM architecture, shrink scope so a 36–48h hackathon can ship a real multi-node demo.
 

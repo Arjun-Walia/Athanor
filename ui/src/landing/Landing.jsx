@@ -3,11 +3,13 @@ import "./landing.css";
 import { clamp, useScrollFrame } from "./hooks.js";
 import Nav from "./Nav.jsx";
 import Hero from "./Hero.jsx";
+import Live from "./Live.jsx";
 import Manifesto from "./Manifesto.jsx";
 import HowItWorks from "./HowItWorks.jsx";
 import Numbers from "./Numbers.jsx";
 import Ticker from "./Ticker.jsx";
 import Breaker from "./Breaker.jsx";
+import Handles from "./Handles.jsx";
 import Playground from "./Playground.jsx";
 import Quickstart from "./Quickstart.jsx";
 import Footer from "./Footer.jsx";
@@ -16,17 +18,20 @@ import Footer from "./Footer.jsx";
  * The landing page. One idea per screen, in this order:
  *
  *   hero        what it is, in one line, over a ring that is quietly working
+ *   live        real figures from the cluster that served the page
  *   manifesto   three sentences that fill in as you scroll
  *   how         four pinned steps: hash, replicate, detect, heal
  *   numbers     the defaults, counted up
  *   ticker      what the event log sounds like
  *   break       an interactive card: kill, flip, heal, restart
+ *   handles     the plan's requirement list, one line each
  *   quorum      N, W, R and what they cost
  *   run         three ways to start it, and the desktop installers
  *
  * Everything that moves is driven by CSS from a handful of custom
- * properties that the hooks in hooks.js write. Nothing here is live
- * cluster data; the dashboard at /app is where the real thing lives.
+ * properties that the hooks in hooks.js write. Only the live strip is
+ * cluster data; everything else is an illustration, and the dashboard at
+ * /app is where the real thing lives.
  */
 export default function Landing() {
   const progressRef = useRef(null);
@@ -59,11 +64,13 @@ export default function Landing() {
       <Nav />
       <main id="main" tabIndex={-1}>
         <Hero />
+        <Live />
         <Manifesto />
         <HowItWorks />
         <Numbers />
         <Ticker />
         <Breaker />
+        <Handles />
         <Playground />
         <Quickstart />
       </main>
