@@ -1,0 +1,42 @@
+# Gateway for five vault-node processes on this machine.
+# Used by scripts/public-up.sh. The Docker overlay uses deploy/Caddyfile,
+# which dials the compose hostnames instead of these ports.
+#
+# Plain HTTP on :8080. TLS is terminated by the Cloudflare tunnel.
+# A node leaves rotation when /v1/admin/ready is not 200.
+
+{
+	auto_https off
+	admin off
+}
+
+:8080 {
+	encode zstd gzip
+
+	reverse_proxy 127.0.0.1:8081 127.0.0.1:8082 127.0.0.1:8083 127.0.0.1:8084 127.0.0.1:8085 {
+		lb_policy round_robin
+		lb_try_duration 5s
+		lb_try_interval 250ms
+
+		health_uri /v1/admin/ready
+		health_interval 5s
+		health_timeout 2s
+		health_status 200
+
+		fail_duration 15s
+		max_fails 1
+		unhealthy_status 5xx
+		unhealthy_latency 10s
+
+		transport http {
+			read_timeout 3m
+			write_timeout 3m
+			dial_timeout 2s
+		}
+	}
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+	}
+}

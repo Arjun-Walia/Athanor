@@ -1,4 +1,4 @@
-.PHONY: build test test-race vet run cluster compose compose-public ui ui-build ui-embed proto desktop desktop-dist install-desktop docker
+.PHONY: build test test-race vet run cluster compose compose-public public public-down ui ui-build ui-embed proto desktop desktop-dist install-desktop docker
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X main.version=$(VERSION)
@@ -32,6 +32,13 @@ compose:
 # ATHANOR_PUBLIC_URL must be the origin visitors use.
 compose-public:
 	ATHANOR_VERSION=$(VERSION) docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.public.yml up --build -d
+
+# Same public shape without Docker: five processes, a local gateway, cloudflared.
+public:
+	scripts/public-up.sh
+
+public-down:
+	scripts/public-down.sh
 
 docker:
 	docker build -f deploy/Dockerfile --build-arg VERSION=$(VERSION) -t athanor/vault-node:$(VERSION) .

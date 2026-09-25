@@ -46,6 +46,15 @@ ATHANOR_PUBLIC_URL=https://www.athanor.cfd \
 
 Point the tunnel or DNS at port 8080 of the host (`ATHANOR_GATEWAY_PORT` changes it). The gateway round-robins across the nodes and drops any node whose `/v1/admin/ready` answers 503, so stopping a node from the dashboard never takes the site down.
 
+Without Docker, on the machine that holds the Cloudflare tunnel:
+
+```bash
+scripts/public-up.sh
+scripts/public-down.sh
+```
+
+`public-up.sh` starts the five nodes, the host gateway (`deploy/Caddyfile.host`), and `cloudflared`. If `cloudflared` is not running, `athanor.cfd` returns Cloudflare error 1033: the hostname points at a tunnel that has no connector. These five processes share one machine. A node on another machine joins by running `vault-node` with `--advertise` set to an address the others can dial and `--seeds` set to an existing node's gossip address (`host:7946`). Gossip is TCP and UDP port 7946, and peer gRPC is TCP port 9090. The website tunnel does not carry either.
+
 **One process:** `make run` starts a single node with N=W=R=1. A write cannot wait for replicas that don't exist.
 
 Requirements: Go 1.25+, Node.js 20+ for the UI and desktop app, and Docker for compose.
