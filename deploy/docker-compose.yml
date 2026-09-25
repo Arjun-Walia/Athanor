@@ -1,0 +1,69 @@
+# Five independent vault-node processes on one bridge network.
+# HTTP is published on the host. Gossip and gRPC stay on the compose network
+# until those listeners exist. Named volumes are the per-node disks.
+
+name: athanor
+
+x-node: &node
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+  networks: [athanor]
+  restart: unless-stopped
+  healthcheck:
+    test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/v1/admin/health"]
+    interval: 10s
+    timeout: 3s
+    retries: 5
+    start_period: 5s
+
+services:
+  node1:
+    <<: *node
+    hostname: node1
+    ports: ["8081:8080"]
+    volumes: [node1:/data]
+    command:
+      ["--id", "node1", "--http", ":8080", "--grpc", ":9090", "--data", "/data", "--seeds", "node2,node3,node4,node5"]
+
+  node2:
+    <<: *node
+    hostname: node2
+    ports: ["8082:8080"]
+    volumes: [node2:/data]
+    command:
+      ["--id", "node2", "--http", ":8080", "--grpc", ":9090", "--data", "/data", "--seeds", "node1,node3,node4,node5"]
+
+  node3:
+    <<: *node
+    hostname: node3
+    ports: ["8083:8080"]
+    volumes: [node3:/data]
+    command:
+      ["--id", "node3", "--http", ":8080", "--grpc", ":9090", "--data", "/data", "--seeds", "node1,node2,node4,node5"]
+
+  node4:
+    <<: *node
+    hostname: node4
+    ports: ["8084:8080"]
+    volumes: [node4:/data]
+    command:
+      ["--id", "node4", "--http", ":8080", "--grpc", ":9090", "--data", "/data", "--seeds", "node1,node2,node3,node5"]
+
+  node5:
+    <<: *node
+    hostname: node5
+    ports: ["8085:8080"]
+    volumes: [node5:/data]
+    command:
+      ["--id", "node5", "--http", ":8080", "--grpc", ":9090", "--data", "/data", "--seeds", "node1,node2,node3,node4"]
+
+volumes:
+  node1:
+  node2:
+  node3:
+  node4:
+  node5:
+
+networks:
+  athanor:

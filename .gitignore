@@ -1,0 +1,24 @@
+# Binaries
+bin/
+*.exe
+*.test
+*.out
+
+# Local node data
+data/
+*.db
+
+# UI
+ui/node_modules/
+ui/dist/
+
+# Secrets and local env
+.env
+.env.*
+!.env.example
+
+# Editor and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
