@@ -149,7 +149,7 @@ Unit tests cover the store, ring, quorum coordinator, and repair jobs (on an in-
 - N/W/R changes reach every node by gossip.
 - A partial partition does not get a node declared dead.
 
-CI also builds the UI and the Docker image.
+CI runs these tests and builds the UI. The Docker image is not built in CI yet.
 
 ## Honest limits
 
