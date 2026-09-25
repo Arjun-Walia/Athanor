@@ -9,10 +9,17 @@ package webui
 import (
 	"embed"
 	"io/fs"
+	"mime"
 	"net/http"
 	"path"
 	"strings"
 )
+
+func init() {
+	// Go's table does not know the web manifest extension; without this the
+	// file would be served as an octet stream and browsers would ignore it.
+	_ = mime.AddExtensionType(".webmanifest", "application/manifest+json")
+}
 
 //go:embed all:dist
 var dist embed.FS
@@ -46,9 +53,14 @@ func Handler() (h http.Handler, ok bool) {
 		name := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
 		if name != "" && name != "index.html" {
 			if st, err := fs.Stat(root, name); err == nil && !st.IsDir() {
-				if strings.HasPrefix(name, "assets/") {
+				switch {
+				case strings.HasPrefix(name, "assets/"):
 					// Vite hashes asset names, so they can be cached forever.
 					h.Set("Cache-Control", "public, max-age=31536000, immutable")
+				default:
+					// Icons, the social image, robots and the sitemap change
+					// rarely and are fetched by crawlers: a day is plenty.
+					h.Set("Cache-Control", "public, max-age=86400")
 				}
 				files.ServeHTTP(w, r)
 				return

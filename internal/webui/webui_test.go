@@ -28,3 +28,32 @@ func TestHandlerServesIndexForClientRoutesWhenBuilt(t *testing.T) {
 		}
 	}
 }
+
+// Crawler-facing files ship next to the app and must be served as what
+// they are, not as index.html and not as octet streams.
+func TestHandlerServesPublicAssetsWithTheirTypes(t *testing.T) {
+	h, ok := Handler()
+	if !ok {
+		t.Skip("binary built without the UI (run make ui-embed)")
+	}
+	cases := map[string]string{
+		"/robots.txt":       "text/plain",
+		"/sitemap.xml":      "xml",
+		"/site.webmanifest": "application/manifest+json",
+		"/og.jpg":           "image/jpeg",
+		"/favicon.svg":      "image/svg+xml",
+	}
+	for p, want := range cases {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, p, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: %d", p, rec.Code)
+		}
+		if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, want) {
+			t.Fatalf("%s: content type %q, want %q", p, ct, want)
+		}
+		if strings.Contains(rec.Body.String(), `<div id="root">`) {
+			t.Fatalf("%s fell through to index.html", p)
+		}
+	}
+}

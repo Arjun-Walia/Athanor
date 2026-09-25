@@ -8,12 +8,24 @@
 #
 # Requires the vault-node build tools, Caddy, and a tunnel token at
 # ~/.cloudflared/athanor.token (override with TUNNEL_TOKEN_FILE).
+# docs/DEPLOY.md walks through this on an Oracle Cloud VPS, including the
+# systemd unit in deploy/systemd that runs this script at boot.
 # PUBLIC_URL defaults to https://www.athanor.cfd. Every node advertises
 # that origin so a browser on the internet never fails over to localhost.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+
+# Secrets and overrides live in deploy/athanor.env (gitignored; see
+# deploy/athanor.env.example). ATHANOR_ADMIN_TOKEN and
+# ATHANOR_CLUSTER_SECRET set there are inherited by every node.
+if [[ -f "$ROOT/deploy/athanor.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$ROOT/deploy/athanor.env"
+  set +a
+fi
 
 DATA="${DATA:-$ROOT/data/local}"
 RUN="$DATA/run"

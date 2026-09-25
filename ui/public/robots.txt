@@ -1,0 +1,8 @@
+# Athanor: the landing page is for everyone; the dashboard and the API are
+# an application, not documents.
+User-agent: *
+Allow: /
+Disallow: /app
+Disallow: /v1/
+
+Sitemap: https://www.athanor.cfd/sitemap.xml
