@@ -105,7 +105,6 @@ export function InstallDialog({ open, onClose }) {
 
   useEffect(() => {
     if (!open) return undefined;
-    setCopied(false);
     const prev = document.activeElement;
     closeRef.current?.focus();
     const onKey = (e) => {
@@ -135,6 +134,7 @@ export function InstallDialog({ open, onClose }) {
   return (
     <div
       className="desk-backdrop"
+      role="presentation"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -185,10 +185,10 @@ export function InstallButton({ className, children }) {
   if (desktop()) return null;
   return (
     <>
-      <button type="button" className={className} onClick={() => setOpen(true)}>
+      <button type="button" className={className} onClick={() => setOpen(true)} aria-haspopup="dialog">
         {children}
       </button>
-      <InstallDialog open={open} onClose={() => setOpen(false)} />
+      {open ? <InstallDialog open onClose={() => setOpen(false)} /> : null}
     </>
   );
 }

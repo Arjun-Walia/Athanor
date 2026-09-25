@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"time"
@@ -24,7 +25,10 @@ import (
 // maxMessage bounds one peer RPC. Client uploads are capped below this.
 const maxMessage = 96 << 20
 
-const fromHeader = "athanor-from"
+const (
+	fromHeader   = "athanor-from"
+	secretHeader = "athanor-secret"
+)
 
 // Keepalive settings. A peer that vanishes without closing its sockets (a
 // pulled cable, a frozen VM) would otherwise leave a half-open connection
@@ -53,7 +57,7 @@ func newGRPCServer(n *Node) *grpc.Server {
 		grpc.MaxSendMsgSize(maxMessage),
 		grpc.KeepaliveParams(serverKeepalive),
 		grpc.KeepaliveEnforcementPolicy(serverKeepalivePolicy),
-		grpc.ChainUnaryInterceptor(recoverInterceptor(n), partitionInterceptor(n)),
+		grpc.ChainUnaryInterceptor(recoverInterceptor(n), authInterceptor(n.cfg.ClusterSecret), partitionInterceptor(n)),
 	)
 	nodepb.RegisterNodeServer(srv, &rpcServer{n: n})
 	return srv
@@ -70,6 +74,22 @@ func recoverInterceptor(n *Node) grpc.UnaryServerInterceptor {
 				err = status.Errorf(codes.Internal, "panic in %s: %v", info.FullMethod, r)
 			}
 		}()
+		return handler(ctx, req)
+	}
+}
+
+// authInterceptor refuses peer calls that do not carry the cluster secret.
+// With no secret configured every call is accepted, as in a local demo.
+func authInterceptor(secret string) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		if secret == "" {
+			return handler(ctx, req)
+		}
+		md, _ := metadata.FromIncomingContext(ctx)
+		got := md.Get(secretHeader)
+		if len(got) == 0 || subtle.ConstantTimeCompare([]byte(got[0]), []byte(secret)) != 1 {
+			return nil, status.Error(codes.Unauthenticated, "missing or wrong cluster secret")
+		}
 		return handler(ctx, req)
 	}
 }
@@ -232,6 +252,9 @@ func (n *Node) conn(addr string) (*grpc.ClientConn, error) {
 		}),
 		grpc.WithUnaryInterceptor(func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 			ctx = metadata.AppendToOutgoingContext(ctx, fromHeader, n.cfg.ID)
+			if n.cfg.ClusterSecret != "" {
+				ctx = metadata.AppendToOutgoingContext(ctx, secretHeader, n.cfg.ClusterSecret)
+			}
 			return invoker(ctx, method, req, reply, cc, opts...)
 		}),
 	)

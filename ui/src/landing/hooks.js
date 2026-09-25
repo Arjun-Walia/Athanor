@@ -195,14 +195,11 @@ export function useReveal(rootMargin = "0px 0px -12% 0px") {
 
 /** True once the element has been on screen. Never flips back. */
 export function useInView(ref, rootMargin = "0px 0px -15% 0px") {
-  const [seen, setSeen] = useState(false);
+  // Without IntersectionObserver there is nothing to wait for.
+  const [seen, setSeen] = useState(() => typeof IntersectionObserver === "undefined");
   useEffect(() => {
     const el = ref.current;
     if (!el || seen) return undefined;
-    if (typeof IntersectionObserver === "undefined") {
-      setSeen(true);
-      return undefined;
-    }
     const io = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
@@ -221,13 +218,9 @@ export function useInView(ref, rootMargin = "0px 0px -15% 0px") {
 /** Counts from 0 to `to` over `ms` once `go` is true. Integer output. */
 export function useCountUp(to, go, ms = 1200) {
   const reduced = useReducedMotion();
-  const [value, setValue] = useState(reduced ? to : 0);
+  const [value, setValue] = useState(0);
   useEffect(() => {
-    if (!go) return undefined;
-    if (reduced) {
-      setValue(to);
-      return undefined;
-    }
+    if (!go || reduced) return undefined;
     let raf = 0;
     const started = performance.now();
     const step = (now) => {
@@ -239,7 +232,8 @@ export function useCountUp(to, go, ms = 1200) {
     raf = window.requestAnimationFrame(step);
     return () => window.cancelAnimationFrame(raf);
   }, [to, go, ms, reduced]);
-  return value;
+  // Reduced motion shows the final figure at once, without an animation.
+  return reduced ? to : value;
 }
 
 /* ------------------------------------------------------------------ */

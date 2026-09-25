@@ -13,7 +13,7 @@ import { DASHBOARD_PATH } from "./site.js";
 const OWNERS = [0, 1, 2]; // node1..3 own report.pdf; node4 is next in line
 const HINT_HOLDER = 3;
 
-const INITIAL = {
+export const INITIAL = {
   nodes: [
     { alive: true, copy: "ok" },
     { alive: true, copy: "ok" },
@@ -30,7 +30,7 @@ function log(state, level, text) {
   return { ...state, seq: state.seq + 1, log: [...state.log.slice(-4), { id: state.seq, level, text }] };
 }
 
-function reduce(state, action) {
+export function reduce(state, action) {
   const nodes = state.nodes.map((n) => ({ ...n }));
   switch (action.type) {
     case "kill": {

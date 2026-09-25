@@ -38,6 +38,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
@@ -141,6 +142,10 @@ type Disk struct {
 	statMu      sync.Mutex
 	indexErrors int
 	swept       int
+
+	// hintN mirrors the size of the hint bucket so the read path can skip
+	// the hint scan entirely in the common case of no parked hints.
+	hintN atomic.Int64
 }
 
 // Open creates or opens the store rooted at dir and runs a recovery sweep.
@@ -171,8 +176,14 @@ func Open(dir string) (*Disk, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if hints, err := d.ListHints(); err == nil {
+		d.hintN.Store(int64(len(hints)))
+	}
 	return d, nil
 }
+
+// HintCount is how many hints are parked here, without a scan.
+func (d *Disk) HintCount() int { return int(d.hintN.Load()) }
 
 // Close releases the index.
 func (d *Disk) Close() error { return d.db.Close() }
@@ -517,6 +528,8 @@ func (d *Disk) PutHint(target string, meta ObjectMeta, body []byte) (PutResult, 
 	}
 	if found {
 		_ = os.Remove(d.hintPath(target, current))
+	} else {
+		d.hintN.Add(1)
 	}
 	return PutResult{Stored: true, Current: meta}, nil
 }
@@ -530,7 +543,12 @@ func (d *Disk) GetHint(target, key string) (Object, error) {
 }
 
 // FindHint returns the newest verified hint for key across all targets.
+// With no hints parked (the usual case) it answers without touching the
+// index, so a read never pays for a queue that is empty.
 func (d *Disk) FindHint(key string) (Object, error) {
+	if d.hintN.Load() == 0 {
+		return Object{}, ErrNotFound
+	}
 	hints, err := d.ListHints()
 	if err != nil {
 		return Object{}, err
@@ -594,6 +612,7 @@ func (d *Disk) DeleteHintIf(target string, meta ObjectMeta) error {
 	if err != nil {
 		return fmt.Errorf("store: delete hint: %w", err)
 	}
+	d.hintN.Add(-1)
 	_ = os.Remove(d.hintPath(target, current))
 	return nil
 }

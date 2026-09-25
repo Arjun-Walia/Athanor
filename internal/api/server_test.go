@@ -320,3 +320,72 @@ func TestEventStreamPushesNewLines(t *testing.T) {
 		t.Fatal("the write never arrived on the stream")
 	}
 }
+
+// With a token set, reads stay open and everything that changes state
+// needs the bearer token. A node forwards its own token when it asks
+// another node (or itself) to stop or start.
+func TestAdminTokenGatesMutations(t *testing.T) {
+	n, err := node.New(node.Config{
+		ID: "node1", DataDir: t.TempDir(),
+		HTTPAddr: "127.0.0.1:" + port(t), GRPCAddr: "127.0.0.1:" + port(t), GossipAddr: "127.0.0.1:" + port(t),
+		Quorum: replica.Quorum{N: 1, W: 1, R: 1}, Fast: true, Quiet: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Start(); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(NewServer(n, Options{AdminToken: "s3cret"}).Handler())
+	t.Cleanup(func() {
+		srv.Close()
+		_ = n.Close()
+	})
+	withAuth := func(method, url, body, token string) (*http.Response, []byte) {
+		t.Helper()
+		req, _ := http.NewRequest(method, srv.URL+url, strings.NewReader(body))
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		return resp, raw
+	}
+
+	if resp, _ := withAuth(http.MethodGet, "/v1/admin/health", "", ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("reads must stay open: %d", resp.StatusCode)
+	}
+	if _, raw := withAuth(http.MethodGet, "/v1/admin/health", "", ""); decode(t, raw)["admin_auth"] != true {
+		t.Fatalf("health should say auth is on: %s", raw)
+	}
+	resp, _ := withAuth(http.MethodPut, "/v1/objects/x", "x", "")
+	if resp.StatusCode != http.StatusUnauthorized || resp.Header.Get("WWW-Authenticate") == "" {
+		t.Fatalf("write without token = %d", resp.StatusCode)
+	}
+	if resp, _ := withAuth(http.MethodPut, "/v1/objects/x", "x", "wrong"); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("write with wrong token = %d", resp.StatusCode)
+	}
+	if resp, _ := withAuth(http.MethodPost, "/v1/admin/scrub", "", ""); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("admin action without token = %d", resp.StatusCode)
+	}
+	if resp, _ := withAuth(http.MethodPut, "/v1/objects/x", "x", "s3cret"); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("write with token = %d", resp.StatusCode)
+	}
+	if resp, _ := withAuth(http.MethodGet, "/v1/objects/x", "", ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("read after write = %d", resp.StatusCode)
+	}
+	// Forwarded stop/start carries the token along.
+	if resp, raw := withAuth(http.MethodPost, "/v1/admin/nodes/node1/stop", "", "s3cret"); resp.StatusCode != http.StatusOK || decode(t, raw)["state"] != "stopped" {
+		t.Fatalf("forwarded stop = %d %s", resp.StatusCode, raw)
+	}
+	if resp, _ := withAuth(http.MethodPost, "/v1/admin/nodes/node1/start", "", "s3cret"); resp.StatusCode != http.StatusOK {
+		t.Fatalf("forwarded start = %d", resp.StatusCode)
+	}
+	if resp, _ := withAuth(http.MethodOptions, "/v1/objects/x", "", ""); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("preflight must stay open: %d", resp.StatusCode)
+	}
+}

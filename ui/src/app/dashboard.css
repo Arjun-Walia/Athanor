@@ -808,7 +808,9 @@
 }
 
 .ath-nwr-bar.is-grey {
-  background: #8c8b86;
+  /* Dark enough for AA against the light label; the segment is also
+     named "read" in text, so colour is never the only signal. */
+  background: #5f5e59;
   color: #fbfaf5;
 }
 
@@ -2741,4 +2743,22 @@ button.chip {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
   }
+}
+
+.ath-token {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  padding: 0.2rem 0.5rem 0.6rem;
+}
+
+.ath-token .ath-input-row {
+  flex: 1;
+  min-width: 0;
+}
+
+.ath-token .ath-pill-action {
+  min-height: 2.25rem;
+  padding: 0.35rem 0.85rem;
+  font-size: 0.82rem;
 }

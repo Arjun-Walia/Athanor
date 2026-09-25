@@ -57,6 +57,16 @@ scripts/public-down.sh
 
 **One process:** `make run` starts a single node with N=W=R=1. A write cannot wait for replicas that don't exist.
 
+**Locking it down.** Three flags, all off by default so a local demo stays a one-liner:
+
+```bash
+vault-node ... --admin-token "$(openssl rand -hex 16)" \
+               --cluster-secret "$(openssl rand -hex 16)" \
+               --tls-cert cert.pem --tls-key key.pem
+```
+
+`--admin-token` makes every request that changes something (object writes, deletes, stop, start, corrupt, partition, policy) require `Authorization: Bearer <token>`; reads, the dashboard and the event stream stay open. The dashboard has a token field under the plug icon (kept in that tab's session storage). `--cluster-secret` encrypts gossip with AES-GCM and authenticates every peer RPC, so a node that does not know it can neither join the ring nor call a peer. `--tls-cert`/`--tls-key` serve the HTTP API over TLS. Every flag has an `ATHANOR_*` environment twin, which is how a compose file or a systemd unit should pass secrets. A node that is reachable from outside localhost without an admin token logs a warning at start.
+
 Requirements: Go 1.25+, Node.js 20+ for the UI and desktop app, and Docker for compose.
 
 ## The 90-second demo
@@ -172,13 +182,13 @@ deploy/                  Dockerfile, compose topology, public overlay with a gat
 scripts/                 local-cluster.sh, install-desktop.sh
 ```
 
-## Tests
+## Tests and checks
 
 ```bash
-make test-race
+make check      # gofmt, vet, staticcheck, govulncheck, go test -race, eslint, vitest
 ```
 
-Unit tests cover the store (including the crash sweep, damaged index records, and corrupt hints), ring, quorum coordinator (including the retry), repair jobs, the event log, and membership (a node rejoins its seeds after every peer died). `internal/node` starts five real nodes in one test binary, with memberlist gossip and gRPC on loopback. It checks:
+Go unit tests cover the store (crash sweep, damaged index records, corrupt hints, the hint counter), ring, quorum coordinator (including the retry), repair jobs, the event log, the admin token gate, the peer-RPC secret, the overview cache, and membership (a node rejoins its seeds after every peer died). `internal/node` starts real nodes in one test binary, with memberlist gossip and gRPC on loopback. It checks:
 
 - A put on one node is read from another.
 - A stopped node is declared dead, a hint is parked for it, and the hint replays when it returns.
@@ -186,12 +196,33 @@ Unit tests cover the store (including the crash sweep, damaged index records, an
 - N/W/R changes reach every node by gossip.
 - A partial partition does not get a node declared dead.
 - A restarted node keeps the cluster policy and never issues an older version.
+- Two nodes that share a secret replicate normally; a third with a different secret never joins and cannot read.
 
-CI runs vet and the race tests, boots a node and round-trips an object, builds the UI, builds and boots the Docker image, and packages the desktop app for macOS, Windows and Linux. On a `v*` tag the installers are attached to the GitHub release.
+The UI has Vitest unit tests for everything that is pure: formatting, the demo checklist and event grouping, the API helpers, and the break-it model on the landing page. ESLint runs the React hooks rules and `jsx-a11y` (accessibility) on both surfaces.
+
+CI runs gofmt, vet, staticcheck and govulncheck; the race tests with a coverage summary; a one-node smoke test with an admin token and the event stream; npm audit, lint, tests and the build for the UI; the Docker image build and boot; and the desktop installers for macOS, Windows and Linux (attached to the GitHub release on a `v*` tag).
+
+### Requirement → proof
+
+| Requirement in PLAN.md | Test |
+| --- | --- |
+| Multi-node put/get/delete | `TestClusterReplicatesAndReadsAnywhere`, `TestDeleteWritesTombstone` |
+| Configurable N/W/R | `TestClusterGossipsQuorumChange`, `TestConfigValidation`, `TestNodeRestartKeepsPolicyAndClock` |
+| SWIM failure detection | `TestClusterSurvivesStoppedNodeAndReplaysHint`, `TestRejoinsSeedsAfterEveryPeerDied` |
+| Quorum read/write | `TestPutPlacesNReplicasOnThePreferenceList`, `TestWriteFailsWithoutQuorum`, `TestWriteRetriesATransientReplicaFailure` |
+| Checksums on every replica | `TestPutRejectsBadChecksum`, `TestCorruptIsDetectedAndHealedBySameVersion` |
+| Read-repair and scrub | `TestClusterHealsCorruptReplica`, `TestReadSkipsCorruptReplicaAndReportsDivergence`, `TestScrubFindsAndHealsLocalCorruption` |
+| Hinted handoff | `TestSloppyQuorumParksHintAndReadStillWorks`, `TestHintReplayDeliversWhenTargetReturns`, `TestVerifyHintsDropsCorruptOnes` |
+| Rate-limited rebalance | `TestRebalanceMovesKeysToNewOwnerAndDropsExtras`, `TestTokenBucketLimitsRate`, `TestJoinMovesAMinorityOfKeys` |
+| Partitions | `TestClusterPartitionRoutesAround`, `TestBlockedPeerIsUnreachableAndListed` |
+| Metadata consistency | `TestPreferenceIsDistinctAndDeterministic`, `TestNodeRestartKeepsPolicyAndClock` |
+| Live repair log | `TestEventStreamPushesNewLines`, `TestRingKeepsNewestAndCounts` |
+| Availability under load | `TestInflightLimitAnswers503WithRetryAfter`, `TestReadyProbe`, `TestOverviewIsCachedBriefly` |
+| Security | `TestAdminTokenGatesMutations`, `TestAuthInterceptorRequiresTheClusterSecret`, `TestClusterSecretKeepsStrangersOut` |
 
 ## Honest limits
 
-- **No authentication or TLS.** Anyone who can reach a node can stop nodes and flip bytes. The public cluster is a demo; do not store anything you care about on it.
+- **Authentication is opt-in.** Without `--admin-token` anyone who can reach a node can stop nodes and flip bytes, and without `--cluster-secret` any process that can reach the gossip port can join. The public cluster runs open on purpose so visitors can press the buttons; do not store anything you care about on it. There is no per-user authorization: one token, all or nothing.
 - **Storage cost is 3× by default.** Reed–Solomon erasure coding would cost about 1.5× for similar fault tolerance. It is not built.
 - **Last writer wins.** Concurrent writes to one key keep the one with the higher hybrid-clock version. There are no version vectors and no siblings.
 - **Tombstones are kept forever.** There is no tombstone garbage collection.

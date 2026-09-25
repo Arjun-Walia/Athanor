@@ -342,3 +342,76 @@ func TestNodeRestartKeepsPolicyAndClock(t *testing.T) {
 		t.Fatalf("health = %+v", h)
 	}
 }
+
+// Nodes that share a secret gossip and replicate normally; a node with a
+// different secret can neither read the gossip nor call a peer.
+func TestClusterSecretKeepsStrangersOut(t *testing.T) {
+	if testing.Short() {
+		t.Skip("multi-node test")
+	}
+	mk := func(id, secret, seed string) (*Node, string) {
+		gossip := "127.0.0.1:" + strconv.Itoa(freePort(t))
+		seeds := []string(nil)
+		if seed != "" {
+			seeds = []string{seed}
+		}
+		n, err := New(Config{
+			ID: id, DataDir: t.TempDir(),
+			HTTPAddr: "127.0.0.1:" + strconv.Itoa(freePort(t)), GRPCAddr: "127.0.0.1:" + strconv.Itoa(freePort(t)),
+			GossipAddr: gossip, Seeds: seeds, Quorum: replica.Quorum{N: 2, W: 1, R: 1}, VNodes: 16,
+			ScrubInterval: time.Hour, ReapAfter: time.Hour, RPCTimeout: 2 * time.Second,
+			ClusterSecret: secret, Fast: true, Quiet: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := n.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = n.Close() })
+		return n, gossip
+	}
+	a, seed := mk("node1", "hunter2", "")
+	b, _ := mk("node2", "hunter2", seed)
+	c := &cluster{t: t, nodes: map[string]*Node{"node1": a, "node2": b}, names: []string{"node1", "node2"}}
+	c.eventually("the two nodes with the secret find each other", 15*time.Second, func() bool {
+		return a.Reachable("node2") && b.Reachable("node1")
+	})
+	if !a.Secured() {
+		t.Fatal("node should report itself secured")
+	}
+	body := []byte("only for those who know")
+	if _, err := a.Coordinator().Put(context.Background(), "k", body, ""); err != nil {
+		t.Fatalf("put across secured peers: %v", err)
+	}
+	c.eventually("replicated to both", 5*time.Second, func() bool { return c.holds("node1", "k", body) && c.holds("node2", "k", body) })
+
+	stranger, _ := mk("node3", "different", seed)
+	time.Sleep(2 * time.Second)
+	if stranger.Reachable("node1") || a.Reachable("node3") {
+		t.Fatal("a node with the wrong secret joined the ring")
+	}
+	if _, err := stranger.Coordinator().Get(context.Background(), "k"); err == nil {
+		t.Fatal("the stranger read an object it should not see")
+	}
+}
+
+// The overview the dashboard polls is served from a short-lived cache, so
+// many pollers cost one fan-out.
+func TestOverviewIsCachedBriefly(t *testing.T) {
+	c := startCluster(t, 3)
+	ctx := context.Background()
+	first, err := c.nodes["node1"].Overview(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, _ := c.nodes["node1"].Overview(ctx, false)
+	if !first.GeneratedAt.Equal(second.GeneratedAt) {
+		t.Fatal("two immediate overviews should share one computation")
+	}
+	time.Sleep(60 * time.Millisecond) // Fast mode: 20ms TTL
+	third, _ := c.nodes["node1"].Overview(ctx, false)
+	if third.GeneratedAt.Equal(first.GeneratedAt) {
+		t.Fatal("the cache should have expired")
+	}
+}

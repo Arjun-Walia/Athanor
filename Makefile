@@ -1,4 +1,4 @@
-.PHONY: build test test-race vet run cluster compose compose-public public public-down ui ui-build ui-embed proto desktop desktop-dist install-desktop docker
+.PHONY: build test test-race vet lint check run cluster compose compose-public public public-down ui ui-build ui-embed ui-lint ui-test proto desktop desktop-dist install-desktop docker
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X main.version=$(VERSION)
@@ -15,6 +15,21 @@ test-race: vet
 
 vet:
 	go vet ./...
+
+# Static analysis and the known-vulnerability scan, as CI runs them.
+lint: vet
+	test -z "$$(gofmt -l .)"
+	go run honnef.co/go/tools/cmd/staticcheck@latest ./...
+	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+ui-lint:
+	npm --prefix ui run lint
+
+ui-test:
+	npm --prefix ui test
+
+# Everything a reviewer would run before merging.
+check: lint test-race ui-lint ui-test
 
 # One node on its own needs N=W=R=1: a write cannot wait for replicas that
 # do not exist.

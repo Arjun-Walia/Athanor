@@ -165,10 +165,21 @@ func (n *Node) inventories(ctx context.Context) map[string]replica.Inventory {
 }
 
 // Overview builds the cluster, replica map, and metrics from live inventories.
+// The result is cached for a few hundred milliseconds: the dashboard polls
+// it constantly, and every open dashboard would otherwise fan out to every
+// node on its own.
 func (n *Node) Overview(ctx context.Context, includeDeleted bool) (Overview, error) {
 	if !n.Running() {
 		return Overview{}, ErrStopped
 	}
+	idx := 0
+	if includeDeleted {
+		idx = 1
+	}
+	return n.overview[idx].get(n.cacheTTL, func() (Overview, error) { return n.buildOverview(ctx, includeDeleted) })
+}
+
+func (n *Node) buildOverview(ctx context.Context, includeDeleted bool) (Overview, error) {
 	r := n.ring.Load()
 	cfg := n.ClusterConfig()
 	invs := n.inventories(ctx)
@@ -350,11 +361,24 @@ func buildReplicaMap(r *ring.Ring, q replica.Quorum, invs map[string]replica.Inv
 	return objects, metrics
 }
 
-// ClusterEvents merges this node's log with every reachable member's.
+// ClusterEvents merges this node's log with every reachable member's. The
+// merged view is cached briefly and shared by every poller and stream.
 func (n *Node) ClusterEvents(ctx context.Context, limit int) []events.Event {
 	if limit <= 0 {
 		limit = 300
 	}
+	const window = 400
+	if limit > window {
+		return n.clusterEvents(ctx, limit)
+	}
+	all, _ := n.eventsCache.get(n.cacheTTL, func() ([]events.Event, error) { return n.clusterEvents(ctx, window), nil })
+	if len(all) > limit {
+		all = all[len(all)-limit:]
+	}
+	return all
+}
+
+func (n *Node) clusterEvents(ctx context.Context, limit int) []events.Event {
 	all := n.log.Since(0, limit)
 	if n.Running() {
 		var mu sync.Mutex
