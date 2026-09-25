@@ -24,8 +24,8 @@ export default function Footer() {
       <div className="ln-footer-inner">
         <div className="ln-footer-top">
           <div className="ln-footer-brand">
-            <a className="ln-brand" href="#top">
-              <IconBrand size="1.15em" className="ln-brand-glyph" />
+            <a className="brand ln-brand" href="#top">
+              <IconBrand size="1.15em" className="brand-glyph" />
               <span>Athanor</span>
             </a>
             <p>Six phases in the plan. All of them shipped.</p>

@@ -5,6 +5,8 @@ const OVERVIEW_EVERY = 1500;
 const EVENTS_EVERY = 2000;
 const MAX_EVENTS = 800;
 const STORAGE_KEY = "athanor.base";
+// After the event stream drops, poll for this long before trying it again.
+const STREAM_RETRY = 30_000;
 
 // Back off while every node is unreachable so a closed laptop does not
 // hammer a dead address, but come back quickly once something answers.
@@ -66,9 +68,11 @@ async function firstRunning(candidates, skip) {
 }
 
 /**
- * Polls one coordinator node for the overview and the merged event log.
- * If that node stops or disappears, it fails over to another running node
- * it has learned about from gossip (each node publishes its public URL).
+ * Polls one coordinator node for the overview, and follows its merged event
+ * log over server-sent events (falling back to polling when the stream is
+ * unavailable). If that node stops or disappears, it fails over to another
+ * running node it has learned about from gossip (each node publishes its
+ * public URL).
  */
 export function useCluster() {
   const [base, setBase] = useState(null);
@@ -79,6 +83,8 @@ export function useCluster() {
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
   const [nonce, setNonce] = useState(0);
+  // "stream" while the SSE connection is open, "poll" otherwise.
+  const [feed, setFeed] = useState("poll");
 
   const baseRef = useRef(null);
   const knownRef = useRef(initialCandidates());
@@ -100,6 +106,26 @@ export function useCluster() {
   }, []);
 
   const dismissNotice = useCallback(() => setNotice(null), []);
+
+  // Merge a page of events into the timeline, keyed so a replayed page or
+  // an overlapping stream never duplicates a line.
+  const absorb = useCallback((list) => {
+    let changed = false;
+    for (const ev of list ?? []) {
+      const id = `${ev.node}:${ev.seq}:${ev.at}`;
+      if (!eventMap.current.has(id)) {
+        eventMap.current.set(id, { ...ev, id, t: Date.parse(ev.at) });
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    let all = [...eventMap.current.values()].sort((a, b) => a.t - b.t || a.node.localeCompare(b.node) || a.seq - b.seq);
+    if (all.length > MAX_EVENTS) {
+      all = all.slice(all.length - MAX_EVENTS);
+      eventMap.current = new Map(all.map((e) => [e.id, e]));
+    }
+    setEvents(all);
+  }, []);
 
   // Overview loop, with failover and offline backoff.
   useEffect(() => {
@@ -150,6 +176,7 @@ export function useCluster() {
             setBase(next.base);
             ringVersion.current = null;
             misses.current = 0;
+            setNonce((n) => n + 1); // re-open the event feed on the new node
           } else {
             setStatus("offline");
             setError(e.message);
@@ -181,37 +208,62 @@ export function useCluster() {
     };
   }, [nonce]);
 
-  // Event loop: merge every node's log into one timeline, keyed so a
-  // replayed page never duplicates a line.
+  // Event feed: server-sent events when the node offers them, polling
+  // otherwise. The stream carries a snapshot first, then only new lines.
   useEffect(() => {
     let cancelled = false;
     let timer;
+    let source = null;
+    let streamOK = false;
+    let lastStreamFailure = 0;
     const ctrl = new AbortController();
+
+    function openStream(current) {
+      if (typeof EventSource === "undefined") return;
+      if (Date.now() - lastStreamFailure < STREAM_RETRY) return;
+      source = new EventSource(`${current}/v1/admin/events/stream`);
+      const onData = (e) => {
+        try {
+          absorb(JSON.parse(e.data));
+        } catch {
+          // a malformed frame is ignored; the next one is independent
+        }
+      };
+      source.addEventListener("snapshot", onData);
+      source.addEventListener("log", onData);
+      source.onopen = () => {
+        streamOK = true;
+        if (!cancelled) setFeed("stream");
+      };
+      source.onerror = () => {
+        // EventSource retries on its own for transient drops; only give up
+        // (and poll) when the connection never opened or keeps failing.
+        if (source && source.readyState === EventSource.CLOSED) {
+          streamOK = false;
+          lastStreamFailure = Date.now();
+          source = null;
+          if (!cancelled) setFeed("poll");
+        } else if (!streamOK) {
+          source?.close();
+          source = null;
+          lastStreamFailure = Date.now();
+          if (!cancelled) setFeed("poll");
+        }
+      };
+    }
 
     async function tick() {
       const current = baseRef.current;
       if (current) {
-        try {
-          const body = await api.events(current, ctrl.signal);
-          if (cancelled) return;
-          let changed = false;
-          for (const ev of body.events ?? []) {
-            const id = `${ev.node}:${ev.seq}:${ev.at}`;
-            if (!eventMap.current.has(id)) {
-              eventMap.current.set(id, { ...ev, id, t: Date.parse(ev.at) });
-              changed = true;
-            }
+        if (!source) openStream(current);
+        if (!streamOK) {
+          try {
+            const body = await api.events(current, ctrl.signal);
+            if (cancelled) return;
+            absorb(body.events);
+          } catch {
+            // the overview loop reports connectivity
           }
-          if (changed) {
-            let all = [...eventMap.current.values()].sort((a, b) => a.t - b.t || a.node.localeCompare(b.node) || a.seq - b.seq);
-            if (all.length > MAX_EVENTS) {
-              all = all.slice(all.length - MAX_EVENTS);
-              eventMap.current = new Map(all.map((e) => [e.id, e]));
-            }
-            setEvents(all);
-          }
-        } catch {
-          // the overview loop reports connectivity
         }
       }
       if (!cancelled) timer = setTimeout(tick, EVENTS_EVERY);
@@ -221,11 +273,12 @@ export function useCluster() {
     return () => {
       cancelled = true;
       clearTimeout(timer);
+      source?.close();
       ctrl.abort();
     };
-  }, [nonce]);
+  }, [nonce, absorb]);
 
-  return { base, overview, ring, events, status, error, notice, dismissNotice, refresh, connect, known: knownRef.current };
+  return { base, overview, ring, events, status, error, notice, dismissNotice, refresh, connect, feed, known: knownRef.current };
 }
 
 /** A clock that re-renders every `every` ms. */

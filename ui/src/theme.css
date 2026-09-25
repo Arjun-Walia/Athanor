@@ -142,21 +142,32 @@ a {
   font-variant-numeric: tabular-nums;
 }
 
-/* Shared primitives. Both surfaces reuse these so they read as one product. */
+/* Shared primitives. Both surfaces reuse these so they read as one product.
+   Every control in a top bar is --control tall; buttons carry weight 450. */
 
-.brand-pill {
+:root {
+  --control: 2.75rem;
+}
+
+.brand {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.55rem 1.3rem;
-  border: 1.5px solid var(--line-strong);
-  border-radius: var(--pill);
-  font-size: 1.55rem;
+  min-height: var(--control);
+  font-size: 1.25rem;
   font-weight: 400;
   letter-spacing: -0.02em;
   text-decoration: none;
   color: var(--ink);
-  background: rgba(255, 255, 255, 0.25);
+}
+
+.brand-glyph {
+  color: var(--yellow-deep);
+  transition: transform 0.6s var(--ease-spring);
+}
+
+.brand:hover .brand-glyph {
+  transform: rotate(120deg);
 }
 
 .pill-group {
@@ -170,12 +181,17 @@ a {
 }
 
 .pill-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  min-height: calc(var(--control) - 0.5rem);
   border: 0;
   background: transparent;
   border-radius: var(--pill);
-  padding: 0.6rem 1.1rem;
+  padding: 0.5rem 1.1rem;
   font-size: 0.95rem;
-  font-weight: 400;
+  font-weight: 450;
   color: var(--ink-2);
   text-decoration: none;
   white-space: nowrap;
@@ -195,8 +211,8 @@ a {
 .icon-btn {
   display: inline-grid;
   place-items: center;
-  width: 3rem;
-  height: 3rem;
+  width: var(--control);
+  height: var(--control);
   border: 0;
   border-radius: 50%;
   background: var(--card-strong);
@@ -222,6 +238,7 @@ a {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
+  min-height: 1.9rem;
   padding: 0.3rem 0.75rem;
   border-radius: var(--pill);
   font-size: 0.8rem;
@@ -518,6 +535,29 @@ html.is-desktop[data-platform="darwin"] .ln-nav-actions {
   margin-top: 0.7rem !important;
   font-size: 0.8rem;
   color: var(--muted) !important;
+}
+
+/* Touch: nothing tappable below 2.5rem, on either surface. */
+@media (pointer: coarse) {
+  button.chip,
+  .pill-btn,
+  .ath-menu-btn,
+  .ath-icon-sm,
+  .ath-demo-reset,
+  .ln-preset,
+  .ln-tab,
+  .ln-bk-reset,
+  .ln-cmd-copy,
+  .ln-footer-links a,
+  .ln-run-releases {
+    min-height: 2.5rem;
+  }
+
+  .ath-menu-btn,
+  .ath-icon-sm,
+  .ln-cmd-copy {
+    min-width: 2.5rem;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

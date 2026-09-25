@@ -16,6 +16,7 @@
 //	GET    /v1/admin/objects             replica map + metrics
 //	GET    /v1/admin/ring?key=           vnode positions, optional placement
 //	GET    /v1/admin/events              merged event log of reachable nodes
+//	GET    /v1/admin/events/stream       the same log as server-sent events
 //	GET    /v1/admin/config              cluster N/W/R
 //	PUT    /v1/admin/config              change N/W/R, gossiped to all nodes
 //	POST   /v1/admin/scrub               scrub every reachable node now
@@ -116,6 +117,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/admin/objects", s.objects)
 	mux.HandleFunc("GET /v1/admin/ring", s.ring)
 	mux.HandleFunc("GET /v1/admin/events", s.events)
+	mux.HandleFunc("GET /v1/admin/events/stream", s.eventStream)
 	mux.HandleFunc("GET /v1/admin/config", s.getConfig)
 	mux.HandleFunc("PUT /v1/admin/config", s.putConfig)
 	mux.HandleFunc("POST /v1/admin/scrub", s.scrub)
@@ -314,6 +316,96 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		"node":   s.node.ID(),
 		"events": s.node.ClusterEvents(r.Context(), limit),
 	})
+}
+
+// eventStream pushes the merged cluster log as server-sent events. The
+// first message is a snapshot of what the log holds now; after that every
+// new line arrives as it is seen, so the dashboard's repair log is live
+// rather than polled. A comment line every 15 seconds keeps proxies from
+// closing an idle stream, and the write deadline is lifted for this
+// request because a stream is meant to outlive it.
+func (s *Server) eventStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, errors.New("streaming is not supported here"))
+		return
+	}
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+	h := w.Header()
+	h.Set("Content-Type", "text/event-stream; charset=utf-8")
+	h.Set("Cache-Control", "no-cache, no-transform")
+	h.Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	_, _ = fmt.Fprint(w, "retry: 2000\n\n")
+
+	every := StreamInterval
+	if q := r.URL.Query().Get("every_ms"); q != "" {
+		if ms, err := strconv.Atoi(q); err == nil && ms >= 100 && ms <= 10000 {
+			every = time.Duration(ms) * time.Millisecond
+		}
+	}
+	// One sequence cursor per node: a node's log is monotonic, so anything
+	// above the cursor is new to this stream.
+	seen := map[string]uint64{}
+	send := func(name string, evs []node.Event) error {
+		raw, err := json.Marshal(evs)
+		if err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", name, raw); err != nil {
+			return err
+		}
+		flusher.Flush()
+		return nil
+	}
+	collect := func() []node.Event {
+		all := s.node.ClusterEvents(r.Context(), 400)
+		fresh := all[:0:0]
+		for _, ev := range all {
+			if ev.Seq > seen[ev.Node] {
+				seen[ev.Node] = ev.Seq
+				fresh = append(fresh, ev)
+			}
+		}
+		return fresh
+	}
+
+	if err := send("snapshot", nonNilEvents(collect())); err != nil {
+		return
+	}
+	tick := time.NewTicker(every)
+	defer tick.Stop()
+	ping := time.NewTicker(15 * time.Second)
+	defer ping.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ping.C:
+			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		case <-tick.C:
+			fresh := collect()
+			if len(fresh) == 0 {
+				continue
+			}
+			if err := send("log", fresh); err != nil {
+				return
+			}
+		}
+	}
+}
+
+// StreamInterval is how often the event stream looks for new lines.
+var StreamInterval = time.Second
+
+func nonNilEvents(evs []node.Event) []node.Event {
+	if evs == nil {
+		return []node.Event{}
+	}
+	return evs
 }
 
 func (s *Server) getConfig(w http.ResponseWriter, _ *http.Request) {

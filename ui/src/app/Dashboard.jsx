@@ -11,11 +11,12 @@ import Objects from "./pages/Objects.jsx";
 import Events from "./pages/Events.jsx";
 import Durability from "./pages/Durability.jsx";
 
+// Page id, label, and the icon the phone-width tab bar shows beside it.
 const PAGES = [
-  ["overview", "Dashboard"],
-  ["nodes", "Nodes"],
-  ["objects", "Objects"],
-  ["events", "Events"],
+  ["overview", "Dashboard", "Activity"],
+  ["nodes", "Nodes", "Nodes"],
+  ["objects", "Objects", "Box"],
+  ["events", "Events", "Bell"],
 ];
 
 function pageFromPath(pathname) {
@@ -31,7 +32,7 @@ let toastSeq = 0;
 
 export default function Dashboard() {
   const cluster = useCluster();
-  const { base, overview: ov, ring, events, status, error, notice, dismissNotice, refresh, connect, known } = cluster;
+  const { base, overview: ov, ring, events, status, error, notice, dismissNotice, refresh, connect, feed, known } = cluster;
   const now = useNow(1000);
   const [page, setPage] = useState(() => pageFromPath(window.location.pathname));
   const [eventKind, setEventKind] = useState(null);
@@ -163,28 +164,33 @@ export default function Dashboard() {
     <div className="ath-app">
       <div className="ath-frame">
         <header className="ath-top">
-          <a className="brand-pill ath-brand" href="/" title="Athanor home">
-            <Icon.Flame size={20} /> Athanor
+          <a className="brand ath-brand" href="/" title="Athanor home">
+            <Icon.Flame size={22} className="brand-glyph" />
+            <span>Athanor</span>
           </a>
           <nav className="pill-group ath-nav" aria-label="Dashboard sections">
-            {PAGES.map(([id, label]) => (
-              <a
-                key={id}
-                href={pathFor(id)}
-                className="pill-btn"
-                aria-current={page === id ? "page" : undefined}
-                onClick={(e) => {
-                  e.preventDefault();
-                  go(id);
-                }}
-              >
-                {label}
-              </a>
-            ))}
+            {PAGES.map(([id, label, icon]) => {
+              const I = Icon[icon];
+              return (
+                <a
+                  key={id}
+                  href={pathFor(id)}
+                  className="pill-btn ath-nav-link"
+                  aria-current={page === id ? "page" : undefined}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    go(id);
+                  }}
+                >
+                  <I size={18} className="ath-nav-icon" />
+                  <span>{label}</span>
+                </a>
+              );
+            })}
           </nav>
           <div className="ath-top-tools">
             <InstallButton className="ath-setting">
-              <Icon.Download size={18} /> Install
+              <Icon.Download size={18} /> <span className="ath-setting-label">Install</span>
             </InstallButton>
             <a
               href={pathFor("durability")}
@@ -195,7 +201,7 @@ export default function Dashboard() {
                 go("durability");
               }}
             >
-              <Icon.Gear size={18} /> Durability
+              <Icon.Gear size={18} /> <span className="ath-setting-label">Durability</span>
             </a>
             <button type="button" className="icon-btn ath-bell" onClick={() => go("events")} aria-label={`Events, ${alerts} new warnings`} title="Events">
               <Icon.Bell size={19} />
@@ -210,6 +216,8 @@ export default function Dashboard() {
                   {ov ? <span className={`chip ${ov.ready ? "outline" : "yellow"} ath-conn-ready`}>{ov.ready ? "ready" : "not ready"}</span> : null}
                   <br />
                   <span className="mono">{base || "searching…"}</span>
+                  <br />
+                  <span className="ath-conn-feed">{feed === "stream" ? "log streamed live (SSE)" : "log polled every 2s"}</span>
                 </span>
               </div>
               <MenuLabel>Switch to</MenuLabel>
