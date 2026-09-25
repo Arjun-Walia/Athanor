@@ -249,13 +249,81 @@ func (m *Membership) Start() error {
 	stop := m.stop
 	m.mu.Unlock()
 
-	m.wg.Add(4)
+	m.wg.Add(5)
 	go m.joinLoop(ml, stop)
+	go m.rejoinLoop(ml, stop)
 	go m.probeLoop(ml, stop, conf.ProbeInterval)
 	go m.reapLoop(stop)
 	go m.notifyLoop(ml, stop)
 	m.signal()
 	return nil
+}
+
+// Isolated reports whether this node currently sees no other live member.
+// It is what the readiness check and the rejoin loop key on.
+func (m *Membership) Isolated() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.running {
+		return true
+	}
+	for id, mem := range m.members {
+		if id != m.cfg.NodeID && (mem.Status == StatusAlive || mem.Status == StatusSuspect) {
+			return false
+		}
+	}
+	return true
+}
+
+// rejoinLoop heals a full partition. memberlist joins its seeds once and
+// then relies on gossip; if every other member is later declared dead (the
+// network was cut, or this node was the only survivor of a restart), no
+// packet will ever bring the cluster back together on its own. So while the
+// node sees nobody alive, it knocks on the seeds again every few seconds.
+func (m *Membership) rejoinLoop(ml *memberlist.Memberlist, stop chan struct{}) {
+	defer m.wg.Done()
+	var seeds []string
+	for _, s := range m.cfg.Seeds {
+		if s != "" && s != m.cfg.Bind {
+			seeds = append(seeds, s)
+		}
+	}
+	if len(seeds) == 0 {
+		return
+	}
+	every := 5 * time.Second
+	if m.cfg.Fast {
+		every = 500 * time.Millisecond
+	}
+	t := time.NewTicker(every)
+	defer t.Stop()
+	announced := false
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+		}
+		m.mu.Lock()
+		settled, isolated := m.settled, false
+		m.mu.Unlock()
+		if !settled {
+			continue
+		}
+		isolated = m.Isolated()
+		if !isolated {
+			announced = false
+			continue
+		}
+		if !announced {
+			m.emit(events.KindMembership, events.LevelWarn, "%s sees no live peer; retrying its seeds until the cluster is back", m.cfg.NodeID)
+			announced = true
+		}
+		if n, _ := ml.Join(seeds); n > 0 {
+			m.emit(events.KindMembership, events.LevelOK, "%s rejoined gossip through %d seed(s)", m.cfg.NodeID, n)
+			announced = false
+		}
+	}
 }
 
 // Stop shuts gossip down without a graceful leave, so peers have to detect

@@ -116,6 +116,10 @@ export default function Durability({ ov, actions }) {
                 {n}× on disk.
               </span>
             </li>
+            <li>
+              <Icon.Shield size={16} />
+              <span>The policy is gossiped to every node and written to each node&apos;s index, so a full restart keeps it.</span>
+            </li>
           </ul>
         </Card>
       </div>

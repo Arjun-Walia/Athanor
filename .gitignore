@@ -12,17 +12,20 @@ data/
 ui/node_modules/
 ui/dist/
 
-# Desktop shell
+# Desktop shell: dependencies, the copied UI, and packaged installers
 desktop/node_modules/
+desktop/ui-dist/
+desktop/dist/
 
 # Secrets and local env
 .env
 .env.*
 !.env.example
 
-# Editor and OS
+# Editor, tooling and OS
 .idea/
 .vscode/
+.claude/
 .DS_Store
 Thumbs.db
 

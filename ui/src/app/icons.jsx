@@ -1,5 +1,6 @@
 // Line icons in one stroke weight, drawn on a 24px grid. Decorative by
-// default; pass a `title` to make one announce itself.
+// default; pass a `title` to make one announce itself. The landing page has
+// its own smaller set so the two bundles stay independent.
 
 function Svg({ size = 20, title, children, strokeWidth = 1.7, ...rest }) {
   return (

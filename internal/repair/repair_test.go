@@ -176,3 +176,32 @@ func TestTokenBucketLimitsRate(t *testing.T) {
 		t.Fatalf("6 tokens at 50/s took %s", el)
 	}
 }
+
+// The corrupt-hint drop itself is covered in internal/store; this checks
+// the scrubber walks the hint queue and reports it.
+func TestScrubPassCountsParkedHints(t *testing.T) {
+	c := replicatest.New(t, names)
+	body := []byte("hinted bytes")
+	meta := store.ObjectMeta{Key: "k", Version: 5, Checksum: store.Checksum(body), Size: uint64(len(body)), Origin: "node1"}
+	if _, err := c.Stores["node4"].PutHint("node2", meta, body); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Stores["node4"].PutHint("node3", meta, body); err != nil {
+		t.Fatal(err)
+	}
+	hints, _ := c.Stores["node4"].ListHints()
+	obj, err := c.Stores["node4"].GetHint(hints[0].Target, "k")
+	if err != nil || obj.Corrupt {
+		t.Fatalf("parked hint = %+v, %v", obj, err)
+	}
+	log := events.New("node4", 50, true)
+	r := repair.NewRepairer(c.View("node4"), log, time.Second)
+	s := repair.NewScrubber(c.Stores["node4"], r.Repair, log, time.Hour)
+	res, err := s.ScrubPass(context.Background(), true)
+	if err != nil || res.HintsChecked != 2 || res.HintsDropped != 0 {
+		t.Fatalf("healthy hints: %+v, %v", res, err)
+	}
+	if st := s.Status(); st.Passes != 1 || st.HintsChecked != 2 {
+		t.Fatalf("status = %+v", st)
+	}
+}

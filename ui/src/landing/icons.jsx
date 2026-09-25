@@ -1,6 +1,9 @@
 // A small inline icon set for the landing page. 24px grid, 1.7 stroke,
 // drawn with currentColor. Decorative by default (aria-hidden); pass
 // `title` when an icon is the only thing carrying meaning.
+//
+// Kept separate from the dashboard's set on purpose: the landing bundle is
+// lazy-loaded and should not pull the dashboard's icons in with it.
 
 function Svg({ children, size = "1.25em", title, strokeWidth = 1.7, ...rest }) {
   return (
@@ -234,3 +237,47 @@ export const IconPen = (p) => (
     <path d="m14.5 5.5 4 4M4 20l1-5L15.8 4.2a1.8 1.8 0 0 1 2.6 0l1.4 1.4a1.8 1.8 0 0 1 0 2.6L9 19l-5 1Z" />
   </Svg>
 );
+
+export function IconDownload(props) {
+  return (
+    <Svg {...props}>
+      <path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M4.5 19.5h15" />
+    </Svg>
+  );
+}
+
+export function IconRotate(props) {
+  return (
+    <Svg {...props}>
+      <path d="M20 12a8 8 0 1 1-2.34-5.66" />
+      <path d="M20 4v5h-5" />
+    </Svg>
+  );
+}
+
+export function IconSkull(props) {
+  return (
+    <Svg {...props}>
+      <path d="M12 3a8 8 0 0 0-8 8c0 2.6 1.2 4.5 3 5.7V20h10v-3.3c1.8-1.2 3-3.1 3-5.7a8 8 0 0 0-8-8Z" />
+      <circle cx="9" cy="11" r="1.4" fill="currentColor" stroke="none" />
+      <circle cx="15" cy="11" r="1.4" fill="currentColor" stroke="none" />
+      <path d="M10.5 16h3" />
+    </Svg>
+  );
+}
+
+export function IconMinus(props) {
+  return (
+    <Svg {...props}>
+      <path d="M5 12h14" />
+    </Svg>
+  );
+}
+
+export function IconPlus(props) {
+  return (
+    <Svg {...props}>
+      <path d="M12 5v14M5 12h14" />
+    </Svg>
+  );
+}

@@ -23,10 +23,16 @@ type Inventory struct {
 	Hints    []store.ObjectMeta
 	Tampered []string
 	Bytes    uint64
+	// IndexErrors is how many index records on that node no longer decode.
+	// They are invisible to every scan above, so the dashboard shows the
+	// count rather than pretending the node is whole.
+	IndexErrors int
 }
 
 // Peer is one cluster member as seen from a coordinator. The local node is
-// a Peer too, so the coordinator never special-cases itself.
+// a Peer too, so the coordinator never special-cases itself. Every method
+// must respect ctx: the coordinator bounds each call and moves on to a
+// fallback when the deadline passes.
 type Peer interface {
 	ID() string
 	Replicate(ctx context.Context, meta store.ObjectMeta, body []byte, reason string) (store.PutResult, error)

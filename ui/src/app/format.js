@@ -65,6 +65,12 @@ export function plural(n, one, many = `${one}s`) {
   return `${n} ${n === 1 ? one : many}`;
 }
 
+/** 0.5 → "50%", with no decimals below 100. */
+export function pct(fraction) {
+  if (!Number.isFinite(fraction)) return "—";
+  return `${Math.round(fraction * 100)}%`;
+}
+
 export function nodeShort(id) {
   const m = /^node(\d+)$/.exec(id || "");
   return m ? `n${m[1]}` : id;

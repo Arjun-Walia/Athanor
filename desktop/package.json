@@ -1,13 +1,123 @@
 {
   "name": "athanor-desktop",
+  "productName": "Athanor",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Frameless desktop shell for the Athanor dashboard",
+  "author": {
+    "name": "Arjun Walia",
+    "url": "https://github.com/Arjun-Walia"
+  },
+  "homepage": "https://www.athanor.cfd",
   "main": "main.cjs",
   "scripts": {
-    "start": "electron --no-sandbox ."
+    "prepare-ui": "node scripts/prepare-ui.cjs",
+    "start": "npm run prepare-ui && electron .",
+    "pack": "npm run prepare-ui && electron-builder --dir",
+    "dist": "npm run prepare-ui && electron-builder --publish never",
+    "dist:mac": "npm run prepare-ui && electron-builder --mac --publish never",
+    "dist:win": "npm run prepare-ui && electron-builder --win --publish never",
+    "dist:linux": "npm run prepare-ui && electron-builder --linux --publish never",
+    "release": "npm run prepare-ui && electron-builder --publish always"
   },
   "devDependencies": {
-    "electron": "^37.2.0"
+    "electron": "^37.2.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "cfd.athanor.desktop",
+    "productName": "Athanor",
+    "copyright": "Athanor contributors",
+    "npmRebuild": false,
+    "asar": true,
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "ui-dist/**/*",
+      "!**/*.map"
+    ],
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.png",
+      "identity": null,
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "universal"
+          ]
+        }
+      ],
+      "artifactName": "Athanor-mac-${arch}.${ext}"
+    },
+    "dmg": {
+      "title": "Athanor",
+      "contents": [
+        {
+          "x": 140,
+          "y": 180
+        },
+        {
+          "x": 400,
+          "y": 180,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    },
+    "win": {
+      "icon": "build/icon.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Athanor-win-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "deleteAppDataOnUninstall": false
+    },
+    "linux": {
+      "category": "Development",
+      "icon": "build/icon.png",
+      "maintainer": "Athanor contributors",
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Athanor-linux-${arch}.${ext}"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "Arjun-Walia",
+      "repo": "Athanor",
+      "releaseType": "release"
+    }
   }
 }

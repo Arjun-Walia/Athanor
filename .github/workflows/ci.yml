@@ -2,7 +2,12 @@ name: ci
 
 on:
   push:
+    branches: ["**"]
+    tags: ["v*"]
   pull_request:
+
+permissions:
+  contents: write
 
 jobs:
   go:
@@ -12,8 +17,16 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: go test ./...
-      - run: go build -o /tmp/vault-node ./cmd/vault-node
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+      - run: go build -ldflags "-X main.version=${GITHUB_SHA::7}" -o /tmp/vault-node ./cmd/vault-node
+      - name: single node smoke test
+        run: |
+          /tmp/vault-node --id smoke --http 127.0.0.1:18080 --grpc 127.0.0.1:19090 --gossip 127.0.0.1:17946 --data /tmp/smoke --n 1 --w 1 --r 1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:18080/v1/admin/ready && break; sleep 0.5; done
+          curl -sf -X PUT --data 'hello' http://127.0.0.1:18080/v1/objects/ci.txt
+          test "$(curl -sf http://127.0.0.1:18080/v1/objects/ci.txt)" = "hello"
+          kill %1
 
   ui:
     runs-on: ubuntu-latest
@@ -28,3 +41,65 @@ jobs:
         working-directory: ui
       - run: npm run build
         working-directory: ui
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-dist
+          path: ui/dist
+          retention-days: 7
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: build the node image
+        run: docker build -f deploy/Dockerfile --build-arg VERSION=${GITHUB_SHA::7} -t athanor/vault-node:ci .
+      - name: boot one node from the image
+        run: |
+          docker run -d --name smoke -p 18080:8080 athanor/vault-node:ci --id smoke --n 1 --w 1 --r 1
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:18080/v1/admin/ready && break; sleep 1; done
+          curl -sf http://127.0.0.1:18080/app | grep -q '<div id="root">'
+          docker rm -f smoke
+
+  # Installers for every platform. On a v* tag they are attached to the
+  # GitHub release; otherwise they are workflow artifacts.
+  desktop:
+    needs: [ui]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: mac
+          - os: windows-latest
+            target: win
+          - os: ubuntu-latest
+            target: linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: ui-dist
+          path: ui/dist
+      - run: npm ci --no-audit --no-fund
+        working-directory: desktop
+      - name: package
+        working-directory: desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUBLISH: ${{ startsWith(github.ref, 'refs/tags/v') && 'always' || 'never' }}
+        run: npx electron-builder --${{ matrix.target }} --publish $PUBLISH
+      - uses: actions/upload-artifact@v4
+        with:
+          name: athanor-desktop-${{ matrix.target }}
+          path: |
+            desktop/dist/*.dmg
+            desktop/dist/*.zip
+            desktop/dist/*.exe
+            desktop/dist/*.AppImage
+            desktop/dist/*.deb
+          if-no-files-found: error
+          retention-days: 14

@@ -1,258 +1,164 @@
 import { Fragment, useRef } from "react";
-import { clamp, useLatest, usePointerParallax, useReducedMotion, useScrollFrame } from "./hooks.js";
-import {
-  IconArrowUpRight,
-  IconCheck,
-  IconEye,
-  IconFile,
-  IconLayers,
-  IconRing,
-  IconServer,
-  IconShield,
-} from "./icons.jsx";
+import { useMagnetic, usePointerParallax, useReducedMotion } from "./hooks.js";
+import { IconArrowDown, IconArrowUpRight } from "./icons.jsx";
 import { InstallButton } from "../shell.jsx";
+import { DASHBOARD_PATH } from "./site.js";
 
-const HEADLINE = [
-  ["Storage", "that", "keeps"],
-  ["its", "own", "fire", "lit."],
-];
-// Index of each line's first word, for the staggered rise.
+const HEADLINE = [["Storage", "that"], ["heals", "itself."]];
 const LINE_START = HEADLINE.map((_, li) => HEADLINE.slice(0, li).reduce((n, line) => n + line.length, 0));
 
-const STATS = [
-  { n: "3", label: "copies", sub: "N", Icon: IconLayers },
-  { n: "2", label: "write acks", sub: "W", Icon: IconCheck },
-  { n: "2", label: "reads", sub: "R", Icon: IconEye },
-  { n: "64", label: "vnodes", sub: "", Icon: IconRing },
-  { n: "5", label: "nodes", sub: "", Icon: IconServer },
+/* ---------- the ring behind the headline ---------- */
+
+const SIZE = 600;
+const C = SIZE / 2;
+const R = 236;
+const f = (n) => Math.round(n * 100) / 100;
+const pt = (r, deg) => {
+  const a = (deg * Math.PI) / 180;
+  return [f(C + r * Math.sin(a)), f(C - r * Math.cos(a))];
+};
+
+// Five nodes, evenly spaced. The write lands on 1, 2 and 3; node 2 dies for
+// a while and node 4 holds its hint; node 3's copy is flipped and healed.
+const NODES = [0, 1, 2, 3, 4].map((i) => {
+  const deg = 18 + i * 72;
+  const [x, y] = pt(R, deg);
+  return { i, deg, x, y, name: `n${i + 1}` };
+});
+
+const TICKS = Array.from({ length: 90 }, (_, i) => {
+  const deg = i * 4;
+  const long = i % 5 === 0;
+  const [x1, y1] = pt(long ? R + 44 : R + 50, deg);
+  const [x2, y2] = pt(R + 56, deg);
+  return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} className={long ? "is-long" : undefined} />;
+});
+
+function path(to) {
+  const n = NODES[to];
+  const mx = f((C + n.x) / 2);
+  const my = f((C + n.y) / 2);
+  return `M${C} ${C} Q${mx} ${my} ${n.x} ${n.y}`;
+}
+
+function pathBetween(a, b, bend = 60) {
+  const p = NODES[a];
+  const q = NODES[b];
+  let mx = (p.x + q.x) / 2;
+  let my = (p.y + q.y) / 2;
+  const dx = mx - C;
+  const dy = my - C;
+  const len = Math.hypot(dx, dy) || 1;
+  mx = f(mx + (dx / len) * bend);
+  my = f(my + (dy / len) * bend);
+  return `M${p.x} ${p.y} Q${mx} ${my} ${q.x} ${q.y}`;
+}
+
+// Each packet is a CSS animation along an offset-path, timed on a shared
+// 12-second loop (see .ln-hero-pk in landing.css).
+const PACKETS = [
+  { id: "w1", d: path(0), kind: "write", delay: 0.6 },
+  { id: "w2", d: path(1), kind: "write", delay: 0.75 },
+  { id: "w3", d: path(2), kind: "write", delay: 0.9 },
+  { id: "h4", d: path(3), kind: "hint", delay: 5.2 },
+  { id: "r3", d: pathBetween(0, 2), kind: "repair", delay: 7.6 },
+  { id: "b2", d: pathBetween(3, 1), kind: "hint", delay: 9.8 },
 ];
 
-// Tick marks for the dial that circles the furnace orb.
-const ORB_TICKS = Array.from({ length: 72 }, (_, i) => {
-  const a = (i * 5 * Math.PI) / 180;
-  const long = i % 6 === 0;
-  const r1 = long ? 88 : 92;
-  const r2 = 97;
-  const f = (n) => Math.round(n * 100) / 100;
+function Ring() {
   return (
-    <line
-      key={i}
-      x1={f(100 + r1 * Math.sin(a))}
-      y1={f(100 - r1 * Math.cos(a))}
-      x2={f(100 + r2 * Math.sin(a))}
-      y2={f(100 - r2 * Math.cos(a))}
-      className={long ? "is-long" : undefined}
-    />
+    <svg className="ln-hero-ring" viewBox={`0 0 ${SIZE} ${SIZE}`} aria-hidden="true" focusable="false">
+      <defs>
+        <radialGradient id="ln-hero-core" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="#fff3c2" stopOpacity="0.95" />
+          <stop offset="45%" stopColor="#f6cf45" stopOpacity="0.28" />
+          <stop offset="100%" stopColor="#f6cf45" stopOpacity="0" />
+        </radialGradient>
+      </defs>
+      <circle cx={C} cy={C} r={R - 30} fill="url(#ln-hero-core)" className="ln-hero-core" />
+      <g className="ln-hero-ticks">{TICKS}</g>
+      <circle cx={C} cy={C} r={R} className="ln-hero-track" />
+      <circle cx={C} cy={C} r={R} className="ln-hero-arc" pathLength="100" />
+      {NODES.map((n) => (
+        <line key={`s-${n.i}`} className="ln-hero-spoke" x1={C} y1={C} x2={n.x} y2={n.y} />
+      ))}
+      {PACKETS.map((p) => (
+        <path key={`t-${p.id}`} d={p.d} className={`ln-hero-trail is-${p.kind}`} style={{ "--d": `${p.delay}s` }} />
+      ))}
+      {NODES.map((n) => (
+        <g key={n.i} className="ln-hero-node" style={{ "--i": n.i }} transform={`translate(${n.x} ${n.y})`}>
+          <circle r="36" className="ln-hero-node-halo" />
+          <circle r="27" className="ln-hero-node-body" />
+          <text dy="-0.1em" className="ln-hero-node-label">
+            {n.name}
+          </text>
+          <g className="ln-hero-node-mark">
+            <path d="M-6 0l4 4 8-8" className="is-ok" />
+            <path d="M-5-5l10 10M5-5l-10 10" className="is-x" />
+          </g>
+        </g>
+      ))}
+      <circle r="9" className="ln-hero-obj" cx={C} cy={C} />
+      {PACKETS.map((p) => (
+        <circle key={p.id} r={p.kind === "repair" ? 8 : 6.5} className={`ln-hero-pk is-${p.kind}`} style={{ "--d": `${p.delay}s`, offsetPath: `path("${p.d}")` }} />
+      ))}
+    </svg>
   );
-});
+}
 
-const DIAL_TICKS = Array.from({ length: 40 }, (_, i) => {
-  const a = (i * 9 * Math.PI) / 180;
-  const f = (n) => Math.round(n * 100) / 100;
-  return (
-    <line
-      key={i}
-      x1={f(50 + 38 * Math.sin(a))}
-      y1={f(50 - 38 * Math.cos(a))}
-      x2={f(50 + 43 * Math.sin(a))}
-      y2={f(50 - 43 * Math.cos(a))}
-    />
-  );
-});
+/* ---------- section ---------- */
 
 export default function Hero() {
   const rootRef = useRef(null);
+  const ctaRef = useRef(null);
   const reduced = useReducedMotion();
-  const reducedRef = useLatest(reduced);
-  const lastP = useRef(-1);
-
   usePointerParallax(rootRef, !reduced);
-
-  useScrollFrame(() => {
-    const el = rootRef.current;
-    if (!el) return undefined;
-    const rect = el.getBoundingClientRect();
-    const p = reducedRef.current ? 0 : clamp(-rect.top / Math.max(1, rect.height));
-    const q = Math.round(p * 1000) / 1000;
-    if (q === lastP.current) return undefined;
-    lastP.current = q;
-    return () => el.style.setProperty("--hp", String(q));
-  });
+  useMagnetic(ctaRef);
 
   return (
     <section className="ln-hero" id="top" ref={rootRef} aria-labelledby="ln-hero-title">
-      <div className="ln-hero-inner">
-        <div className="ln-hero-copy">
-          <p className="ln-hero-tags">
-            <span className="chip outline">Go</span>
-            <span className="chip yellow">3 · 2 · 2</span>
-          </p>
-
-          <h1 id="ln-hero-title" className="ln-h1">
-            <span className="sr-only">Storage that keeps its own fire lit.</span>
-            {HEADLINE.map((line, li) => (
-              <span key={li} className="ln-h1-line" aria-hidden="true">
-                {line.map((w, wi) => (
-                  <Fragment key={w}>
-                    {wi > 0 ? " " : null}
-                    <span className="ln-word">
-                      <span
-                        className={w === "fire" ? "ln-word-in ln-fire" : "ln-word-in"}
-                        style={{ "--i": LINE_START[li] + wi }}
-                      >
-                        {w}
-                      </span>
-                    </span>
-                  </Fragment>
-                ))}
-              </span>
-            ))}
-          </h1>
-
-          <p className="ln-lede">Three copies. A bad byte heals itself.</p>
-
-          <div className="ln-hero-ctas">
-            <a className="ln-btn ln-btn-dark ln-btn-lg" href="/app">
-              Open dashboard <IconArrowUpRight size="1.1rem" />
-            </a>
-            <InstallButton className="ln-btn ln-btn-ghost ln-btn-lg">Install</InstallButton>
-          </div>
-        </div>
-
-        <div className="ln-hero-visual" aria-hidden="true">
-          <div className="ln-orb-wrap">
-            <div className="ln-orb-halo" />
-            <div className="ln-orb">
-              <span className="ln-orb-shimmer" />
-              <span className="ln-orb-core" />
-            </div>
-            <svg className="ln-orb-ring" viewBox="0 0 200 200" focusable="false">
-              <g className="ln-orb-ring-spin">
-                {ORB_TICKS}
-                <circle cx="100" cy="100" r="80" className="ln-orb-arc" pathLength="100" />
-              </g>
-            </svg>
-          </div>
-
-          <div className="ln-frag ln-frag-node" style={{ "--d": 0.65 }}>
-            <div className="ln-frag-in" style={{ "--i": 0 }}>
-              <div className="ln-frag-body surface-card ln-fcard">
-                <div className="ln-fcard-head">
-                  <span className="ln-fcard-icon">
-                    <IconServer size="1.05rem" />
-                  </span>
-                  <span className="ln-fcard-title">node1</span>
-                  <span className="chip dark">
-                    <IconCheck size="0.8rem" /> alive
-                  </span>
-                </div>
-                <div className="ln-fcard-row">
-                  <span>vnodes</span>
-                  <span className="ln-fcard-num num">64</span>
-                </div>
-                <div className="ln-fcard-bars">
-                  <span className="is-dark" />
-                  <span className="is-yellow" />
-                  <span className="is-hatch hatched" />
-                  <span className="is-outline" />
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="ln-frag ln-frag-quorum" style={{ "--d": 1.15 }}>
-            <div className="ln-frag-in" style={{ "--i": 1 }}>
-              <div className="ln-frag-body ln-qpill">
-                <span className="is-dark">
-                  N <b>3</b>
-                </span>
-                <span className="is-yellow">
-                  W <b>2</b>
-                </span>
-                <span className="is-hatch hatched">
-                  R <b>2</b>
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div className="ln-frag ln-frag-replicas" style={{ "--d": 0.9 }}>
-            <div className="ln-frag-in" style={{ "--i": 2 }}>
-              <div className="ln-frag-body surface-card ln-rcard">
-                <span className="ln-rcard-file">
-                  <IconFile size="1rem" /> report.pdf
-                </span>
-                <span className="ln-rcard-dots">
-                  {[1, 2, 3, 4, 5].map((n) => (
-                    <span key={n} className={n <= 3 ? "is-on" : undefined}>
-                      <i />
-                      n{n}
-                    </span>
-                  ))}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div className="ln-frag ln-frag-sum" style={{ "--d": 1.4 }}>
-            <div className="ln-frag-in" style={{ "--i": 3 }}>
-              <div className="ln-frag-body ln-sumchip">
-                <span className="ln-sumchip-icon">
-                  <IconShield size="1.05rem" />
-                </span>
-                <span>
-                  <b>SHA-256 match</b>
-                  <code>6466e450…fe01b15</code>
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div className="ln-frag ln-frag-dial" style={{ "--d": 0.4 }}>
-            <div className="ln-frag-in" style={{ "--i": 4 }}>
-              <div className="ln-frag-body ln-dialcard surface-card">
-                <svg viewBox="0 0 100 100" focusable="false">
-                  <g className="ln-dial-ticks">{DIAL_TICKS}</g>
-                  <circle cx="50" cy="50" r="31" className="ln-dial-track" />
-                  <circle cx="50" cy="50" r="31" className="ln-dial-arc" pathLength="100" />
-                </svg>
-                <span className="ln-dialcard-text">
-                  <b className="num">3.0×</b>
-                  <span>storage</span>
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div className="ln-frag ln-frag-log" style={{ "--d": 0.95 }}>
-            <div className="ln-frag-in" style={{ "--i": 5 }}>
-              <div className="ln-frag-body ln-logpill">
-                <span className="ln-logpill-icon">
-                  <IconCheck size="0.85rem" />
-                </span>
-                node3 repaired from node1
-              </div>
-            </div>
-          </div>
-        </div>
+      <div className="ln-hero-glow" aria-hidden="true" />
+      <div className="ln-hero-stage" aria-hidden="true">
+        <Ring />
       </div>
 
-      <div className="ln-hero-foot">
-        <ul className="ln-stats" aria-label="Defaults in the design">
-          {STATS.map(({ n, label, sub, Icon }) => (
-            <li key={label} className="ln-stat">
-              <span className="ln-stat-icon">
-                <Icon size="1rem" />
-              </span>
-              <span className="ln-stat-n num">
-                {n}
-                {sub ? <small>{sub}</small> : null}
-              </span>
-              <span className="ln-stat-label">{label}</span>
-            </li>
+      <div className="ln-hero-copy">
+        <p className="ln-hero-kicker ln-rise" style={{ "--i": 0 }}>
+          A fault-tolerant object store
+        </p>
+        <h1 id="ln-hero-title" className="ln-h1">
+          <span className="sr-only">Storage that heals itself.</span>
+          {HEADLINE.map((line, li) => (
+            <span key={li} className="ln-h1-line" aria-hidden="true">
+              {line.map((w, wi) => (
+                <Fragment key={w}>
+                  {wi > 0 ? " " : null}
+                  <span className="ln-word">
+                    <span className={`ln-word-in${w === "heals" ? " ln-word-mark" : ""}`} style={{ "--i": LINE_START[li] + wi + 1 }}>
+                      {w}
+                    </span>
+                  </span>
+                </Fragment>
+              ))}
+            </span>
           ))}
-        </ul>
+        </h1>
+        <p className="ln-lede ln-rise" style={{ "--i": 5 }}>
+          Three copies of every object. A node can die, a byte can flip, and the read still comes back right.
+        </p>
+        <div className="ln-hero-ctas ln-rise" style={{ "--i": 6 }}>
+          <a className="ln-btn ln-btn-dark ln-btn-lg ln-magnet" href={DASHBOARD_PATH} ref={ctaRef}>
+            Open the dashboard <IconArrowUpRight size="1.05rem" />
+          </a>
+          <InstallButton className="ln-btn ln-btn-ghost ln-btn-lg">Install the app</InstallButton>
+        </div>
       </div>
+
+      <a className="ln-hero-cue ln-rise" style={{ "--i": 8 }} href="#how" aria-label="Scroll to how it works">
+        <span className="ln-hero-cue-line" aria-hidden="true" />
+        <IconArrowDown size="1rem" />
+        <span>How it works</span>
+      </a>
     </section>
   );
 }

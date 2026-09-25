@@ -1,3 +1,7 @@
+// Small building blocks shared by every dashboard page: node colours,
+// status badges, replica dots, cards, menus, toasts. Nothing here talks to
+// the API; pages pass data in.
+
 import { useEffect, useId, useRef, useState } from "react";
 import { Icon } from "./icons.jsx";
 
@@ -195,6 +199,17 @@ export function Toasts({ items, onDismiss }) {
         );
       })}
     </div>
+  );
+}
+
+/** A yes/no fact with a word and an icon, never colour alone. */
+export function Fact({ ok, children }) {
+  const I = ok ? Icon.Check : Icon.Alert;
+  return (
+    <span className={`ath-fact ${ok ? "is-ok" : "is-warn"}`}>
+      <I size={13} strokeWidth={2.4} />
+      {children}
+    </span>
   );
 }
 

@@ -6,6 +6,10 @@
 
 // Node-to-node RPC. Generated Go lives in internal/api/nodepb; regenerate
 // with `make proto` after editing this file.
+//
+// Every call is unary and bounded by the caller's deadline. Servers answer
+// Unavailable for a peer they are partitioned from, and a panic inside a
+// handler is turned into Internal for that one call.
 
 package nodepb
 

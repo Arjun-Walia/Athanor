@@ -13,6 +13,12 @@
 //
 // The index is the source of truth for which local files are live replicas.
 // Every read re-hashes the payload against the SHA-256 in the index.
+//
+// Crash recovery: Open sweeps the blob and hint trees and removes any file
+// the index does not point at (half-written temporaries, old versions that
+// were superseded between the payload rename and the index write). A record
+// in the index that no longer decodes is skipped and counted rather than
+// taking the whole node down with it.
 package store
 
 import (
@@ -24,11 +30,13 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,6 +49,9 @@ var ErrNotFound = errors.New("store: not found")
 var (
 	bucketObjects = []byte("objects")
 	bucketHints   = []byte("hints")
+	// bucketMeta holds small node-level records that must survive a
+	// restart: the gossiped cluster policy and the clock high-water mark.
+	bucketMeta = []byte("meta")
 )
 
 // ObjectMeta is the index record stored beside each local replica.
@@ -110,6 +121,11 @@ type Stats struct {
 	Bytes      uint64 `json:"bytes"`
 	Hints      int    `json:"hints"`
 	HintBytes  uint64 `json:"hint_bytes"`
+	// IndexErrors counts index records that no longer decode. They are
+	// skipped by every scan; a non-zero value is worth an operator's look.
+	IndexErrors int `json:"index_errors"`
+	// Swept is how many orphan files the last recovery sweep removed.
+	Swept int `json:"swept"`
 }
 
 // Disk is the filesystem + bbolt store. It is safe for concurrent use.
@@ -121,9 +137,13 @@ type Disk struct {
 
 	tamperMu sync.Mutex
 	tampered map[string]bool
+
+	statMu      sync.Mutex
+	indexErrors int
+	swept       int
 }
 
-// Open creates or opens the store rooted at dir.
+// Open creates or opens the store rooted at dir and runs a recovery sweep.
 func Open(dir string) (*Disk, error) {
 	for _, sub := range []string{"blobs", "hints"} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
@@ -135,7 +155,7 @@ func Open(dir string) (*Disk, error) {
 		return nil, fmt.Errorf("store: open index: %w", err)
 	}
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, b := range [][]byte{bucketObjects, bucketHints} {
+		for _, b := range [][]byte{bucketObjects, bucketHints, bucketMeta} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}
@@ -146,7 +166,12 @@ func Open(dir string) (*Disk, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: init index: %w", err)
 	}
-	return &Disk{dir: dir, db: db, tampered: map[string]bool{}}, nil
+	d := &Disk{dir: dir, db: db, tampered: map[string]bool{}}
+	if _, err := d.Sweep(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return d, nil
 }
 
 // Close releases the index.
@@ -154,6 +179,115 @@ func (d *Disk) Close() error { return d.db.Close() }
 
 // Dir is the store root.
 func (d *Disk) Dir() string { return d.dir }
+
+// Sweep removes payload files the index does not reference: temporaries
+// left by a crash mid-write, and old versions superseded between the rename
+// and the index update. It never touches a file the index points at, so it
+// is safe to run while the node serves traffic. It returns how many files
+// were removed.
+func (d *Disk) Sweep() (int, error) {
+	live := map[string]bool{}
+	objs, err := d.List()
+	if err != nil {
+		return 0, err
+	}
+	for _, m := range objs {
+		if !m.Deleted {
+			live[d.blobPath(m)] = true
+		}
+	}
+	hints, err := d.ListHints()
+	if err != nil {
+		return 0, err
+	}
+	for _, h := range hints {
+		if !h.Meta.Deleted {
+			live[d.hintPath(h.Target, h.Meta)] = true
+		}
+	}
+
+	removed := 0
+	for _, root := range []string{filepath.Join(d.dir, "blobs"), filepath.Join(d.dir, "hints")} {
+		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, werr error) error {
+			if werr != nil || entry.IsDir() {
+				return nil
+			}
+			if live[path] {
+				return nil
+			}
+			// A payload that landed after List ran is referenced by now;
+			// re-check the index before deleting anything recent.
+			if info, err := entry.Info(); err == nil && time.Since(info.ModTime()) < 5*time.Second && !strings.HasPrefix(entry.Name(), ".incoming-") {
+				return nil
+			}
+			if err := os.Remove(path); err == nil {
+				removed++
+			}
+			return nil
+		})
+		if err != nil {
+			return removed, fmt.Errorf("store: sweep %s: %w", root, err)
+		}
+	}
+	d.statMu.Lock()
+	d.swept = removed
+	d.statMu.Unlock()
+	return removed, nil
+}
+
+// GetMeta reads a small node-level record written with PutMeta.
+func (d *Disk) GetMeta(name string) ([]byte, bool, error) {
+	var out []byte
+	err := d.db.View(func(tx *bolt.Tx) error {
+		v := tx.Bucket(bucketMeta).Get([]byte(name))
+		if v != nil {
+			out = append([]byte(nil), v...)
+		}
+		return nil
+	})
+	return out, out != nil, err
+}
+
+// PutMeta durably stores a small node-level record (cluster policy, clock).
+func (d *Disk) PutMeta(name string, raw []byte) error {
+	err := d.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket(bucketMeta).Put([]byte(name), raw)
+	})
+	if err != nil {
+		return fmt.Errorf("store: write meta %q: %w", name, err)
+	}
+	return nil
+}
+
+// MaxVersion is the highest object or hint version this node has ever
+// indexed. A restarting node seeds its clock from it so a wall clock that
+// went backwards while the process was down cannot issue an older version.
+func (d *Disk) MaxVersion() (uint64, error) {
+	var maxV uint64
+	scan := func(_, v []byte) error {
+		m, err := decodeMeta(v)
+		if err != nil {
+			return nil
+		}
+		if m.Version > maxV {
+			maxV = m.Version
+		}
+		return nil
+	}
+	err := d.db.View(func(tx *bolt.Tx) error {
+		if err := tx.Bucket(bucketObjects).ForEach(scan); err != nil {
+			return err
+		}
+		return tx.Bucket(bucketHints).ForEach(scan)
+	})
+	return maxV, err
+}
+
+func (d *Disk) noteIndexError() {
+	d.statMu.Lock()
+	d.indexErrors++
+	d.statMu.Unlock()
+}
 
 func (d *Disk) lock(key string) func() {
 	h := fnv.New32a()
@@ -275,19 +409,28 @@ func (d *Disk) DeleteIf(meta ObjectMeta) (bool, error) {
 	return true, d.Delete(meta.Key)
 }
 
-// List returns every primary index entry, sorted by key.
+// List returns every primary index entry, sorted by key. A record that no
+// longer decodes is skipped and counted in Stats.IndexErrors; one damaged
+// entry must not make every other replica on this node invisible.
 func (d *Disk) List() ([]ObjectMeta, error) {
 	var out []ObjectMeta
+	bad := 0
 	err := d.db.View(func(tx *bolt.Tx) error {
 		return tx.Bucket(bucketObjects).ForEach(func(_, v []byte) error {
 			meta, err := decodeMeta(v)
 			if err != nil {
-				return err
+				bad++
+				return nil
 			}
 			out = append(out, meta)
 			return nil
 		})
 	})
+	if bad > 0 {
+		d.statMu.Lock()
+		d.indexErrors = bad
+		d.statMu.Unlock()
+	}
 	return out, err
 }
 
@@ -412,14 +555,16 @@ func (d *Disk) FindHint(key string) (Object, error) {
 	return *best, nil
 }
 
-// ListHints returns every parked hint, grouped by target then key.
+// ListHints returns every parked hint, grouped by target then key. Damaged
+// records are skipped, as in List.
 func (d *Disk) ListHints() ([]Hint, error) {
 	var out []Hint
 	err := d.db.View(func(tx *bolt.Tx) error {
 		return tx.Bucket(bucketHints).ForEach(func(_, v []byte) error {
 			meta, err := decodeMeta(v)
 			if err != nil {
-				return err
+				d.noteIndexError()
+				return nil
 			}
 			out = append(out, Hint{Target: meta.HintedFor, Meta: meta})
 			return nil
@@ -460,7 +605,8 @@ func (d *Disk) Stats() (Stats, error) {
 		err := tx.Bucket(bucketObjects).ForEach(func(_, v []byte) error {
 			meta, err := decodeMeta(v)
 			if err != nil {
-				return err
+				s.IndexErrors++
+				return nil
 			}
 			if meta.Deleted {
 				s.Tombstones++
@@ -476,14 +622,47 @@ func (d *Disk) Stats() (Stats, error) {
 		return tx.Bucket(bucketHints).ForEach(func(_, v []byte) error {
 			meta, err := decodeMeta(v)
 			if err != nil {
-				return err
+				s.IndexErrors++
+				return nil
 			}
 			s.Hints++
 			s.HintBytes += meta.Size
 			return nil
 		})
 	})
+	d.statMu.Lock()
+	s.Swept = d.swept
+	if d.indexErrors > s.IndexErrors {
+		s.IndexErrors = d.indexErrors
+	}
+	d.statMu.Unlock()
 	return s, err
+}
+
+// VerifyHints re-hashes every parked hint and drops the ones whose bytes no
+// longer match. A hint cannot be healed in place (it is a courtesy copy for
+// a node that is away), and a corrupt one must never be replayed, so the
+// honest move is to forget it and let Repair rebuild the owner from the
+// other replicas. It returns how many hints were checked and dropped.
+func (d *Disk) VerifyHints() (checked, dropped int, err error) {
+	hints, err := d.ListHints()
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, h := range hints {
+		if h.Meta.Deleted {
+			continue
+		}
+		checked++
+		ok, verr := d.verifyFile(d.hintPath(h.Target, h.Meta), h.Meta)
+		if verr != nil || ok {
+			continue
+		}
+		if derr := d.DeleteHintIf(h.Target, h.Meta); derr == nil {
+			dropped++
+		}
+	}
+	return checked, dropped, nil
 }
 
 func validate(meta ObjectMeta, body []byte) error {
@@ -631,6 +810,13 @@ func writeFileAtomic(path string, body []byte) error {
 	if err := os.Rename(tmp, path); err != nil {
 		cleanup()
 		return fmt.Errorf("store: rename payload: %w", err)
+	}
+	// The rename is only durable once the directory entry is on disk too.
+	// Without this, a power cut can leave the index pointing at a name the
+	// directory never learned about.
+	if df, err := os.Open(dir); err == nil {
+		_ = df.Sync()
+		_ = df.Close()
 	}
 	return nil
 }

@@ -291,3 +291,54 @@ func TestClusterPartitionRoutesAround(t *testing.T) {
 	c.nodes["node2"].Unblock("")
 	c.eventually("node1 reaches node2 again", 5*time.Second, func() bool { return c.nodes["node1"].Reachable("node2") })
 }
+
+// A restart must not reset the cluster policy to the flags, and must not
+// hand out a version older than one the node already issued.
+func TestNodeRestartKeepsPolicyAndClock(t *testing.T) {
+	dir := t.TempDir()
+	mk := func() *Node {
+		n, err := New(Config{
+			ID: "node1", DataDir: dir,
+			HTTPAddr: "127.0.0.1:" + strconv.Itoa(freePort(t)), GRPCAddr: "127.0.0.1:" + strconv.Itoa(freePort(t)),
+			GossipAddr: "127.0.0.1:" + strconv.Itoa(freePort(t)),
+			Quorum:     replica.Quorum{N: 1, W: 1, R: 1}, Fast: true, Quiet: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := n.Start(); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	n := mk()
+	if _, err := n.SetQuorum(replica.Quorum{N: 1, W: 1, R: 1}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := n.ClusterConfig()
+	res, err := n.Coordinator().Put(context.Background(), "k", []byte("v"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Push the clock far ahead, as a peer with a fast wall clock would.
+	n.clock.Observe(res.Meta.Version + 1<<40)
+	last := n.clock.Last()
+	if err := n.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	n = mk()
+	defer n.Close()
+	if got := n.ClusterConfig(); got.Version != cfg.Version || got.Origin != cfg.Origin {
+		t.Fatalf("policy after restart = %+v, want %+v", got, cfg)
+	}
+	if v := n.clock.Next(); v <= last {
+		t.Fatalf("clock went backwards across restart: %d <= %d", v, last)
+	}
+	if ready, why := n.Ready(); !ready {
+		t.Fatalf("single node not ready after restart: %s", why)
+	}
+	if h := n.Health(); h.Restarts != 1 || h.Events.Total == 0 {
+		t.Fatalf("health = %+v", h)
+	}
+}

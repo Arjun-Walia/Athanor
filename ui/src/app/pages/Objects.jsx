@@ -126,6 +126,7 @@ function ReadReceipt({ read, onClose }) {
         <>
           <p className="ath-receipt-title">
             <Icon.Eye size={15} /> Read <span className="mono">{read.key}</span> via {read.coordinator} in {ms(read.tookMs)}
+            {read.answeredBy && read.answeredBy !== read.coordinator ? <span className="chip outline">answered by {read.answeredBy}</span> : null}
             {read.degraded ? <span className="chip yellow">degraded</span> : null}
           </p>
           <ul>
@@ -210,7 +211,7 @@ export default function Objects({ ov, ring, events, actions, now }) {
           value={m.under_replicated}
           note={m.complete ? "Below N verified copies" : "Partial"}
         />
-        <Metric icon="Clock" label="Hints parked" value={m.hints} note="Waiting on a down owner" />
+        <Metric icon="Clock" label="Hints parked" value={m.hints} note={m.hints ? "Replayed when the owner returns" : "Every owner is reachable"} />
       </div>
       <div className="ath-objects-layout">
         <Uploader actions={actions} quorum={ov.config.quorum} />

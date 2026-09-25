@@ -3,31 +3,42 @@ import "./landing.css";
 import { clamp, useScrollFrame } from "./hooks.js";
 import Nav from "./Nav.jsx";
 import Hero from "./Hero.jsx";
-import RingStory from "./RingStory.jsx";
+import Manifesto from "./Manifesto.jsx";
+import HowItWorks from "./HowItWorks.jsx";
+import Numbers from "./Numbers.jsx";
 import Ticker from "./Ticker.jsx";
-import Requirements from "./Requirements.jsx";
+import Breaker from "./Breaker.jsx";
 import Playground from "./Playground.jsx";
-import Phases from "./Phases.jsx";
 import Quickstart from "./Quickstart.jsx";
 import Footer from "./Footer.jsx";
 
+/*
+ * The landing page. One idea per screen, in this order:
+ *
+ *   hero        what it is, in one line, over a ring that is quietly working
+ *   manifesto   three sentences that fill in as you scroll
+ *   how         four pinned steps: hash, replicate, detect, heal
+ *   numbers     the defaults, counted up
+ *   ticker      what the event log sounds like
+ *   break       an interactive card: kill, flip, heal, restart
+ *   quorum      N, W, R and what they cost
+ *   run         three ways to start it, and the desktop installers
+ *
+ * Everything that moves is driven by CSS from a handful of custom
+ * properties that the hooks in hooks.js write. Nothing here is live
+ * cluster data; the dashboard at /app is where the real thing lives.
+ */
 export default function Landing() {
-  const washRef = useRef(null);
   const progressRef = useRef(null);
   const lastP = useRef(-1);
 
-  // Whole-page progress. The background wash warms toward furnace yellow as
-  // the reader goes down, and a hairline at the top fills. Written only on
-  // the two elements that read it, so no other style is recalculated.
+  // Whole-page progress for the hairline under the nav.
   useScrollFrame((frame) => {
     const max = document.documentElement.scrollHeight - frame.vh;
     const p = Math.round(clamp(max > 0 ? frame.y / max : 0) * 1000) / 1000;
     if (p === lastP.current) return undefined;
     lastP.current = p;
-    return () => {
-      washRef.current?.style.setProperty("--page-p", String(p));
-      progressRef.current?.style.setProperty("--page-p", String(p));
-    };
+    return () => progressRef.current?.style.setProperty("--page-p", String(p));
   });
 
   // The page renders on the client, so the browser cannot honour a #section
@@ -41,19 +52,19 @@ export default function Landing() {
 
   return (
     <div className="ln-root">
-      <div className="ln-wash" ref={washRef} aria-hidden="true" />
-      <span className="ln-nav-progress" ref={progressRef} aria-hidden="true" />
+      <span className="ln-progress" ref={progressRef} aria-hidden="true" />
       <a className="ln-skip" href="#main">
         Skip to content
       </a>
       <Nav />
       <main id="main" tabIndex={-1}>
         <Hero />
-        <RingStory />
+        <Manifesto />
+        <HowItWorks />
+        <Numbers />
         <Ticker />
-        <Requirements />
+        <Breaker />
         <Playground />
-        <Phases />
         <Quickstart />
       </main>
       <Footer />

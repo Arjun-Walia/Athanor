@@ -1,22 +1,40 @@
-.PHONY: build test run cluster compose ui ui-build ui-embed proto desktop install-desktop
+.PHONY: build test test-race vet run cluster compose compose-public ui ui-build ui-embed proto desktop desktop-dist install-desktop docker
+
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -X main.version=$(VERSION)
 
 build:
-	go build -o bin/vault-node ./cmd/vault-node
+	go build -ldflags "$(LDFLAGS)" -o bin/vault-node ./cmd/vault-node
 
 test:
 	go test ./...
 
+# What CI runs: vet, then every test under the race detector.
+test-race: vet
+	go test -race -count=1 ./...
+
+vet:
+	go vet ./...
+
 # One node on its own needs N=W=R=1: a write cannot wait for replicas that
 # do not exist.
 run:
-	go run ./cmd/vault-node --id node1 --http :8080 --gossip 127.0.0.1:7946 --data ./data/node1 --n 1 --w 1 --r 1
+	go run -ldflags "$(LDFLAGS)" ./cmd/vault-node --id node1 --http :8080 --gossip 127.0.0.1:7946 --data ./data/node1 --n 1 --w 1 --r 1
 
 # Five local processes, no Docker. Ports 8081-8085.
 cluster:
 	scripts/local-cluster.sh
 
 compose:
-	docker compose -f deploy/docker-compose.yml up --build
+	ATHANOR_VERSION=$(VERSION) docker compose -f deploy/docker-compose.yml up --build
+
+# Five nodes behind one health-checking gateway, as deployed publicly.
+# ATHANOR_PUBLIC_URL must be the origin visitors use.
+compose-public:
+	ATHANOR_VERSION=$(VERSION) docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.public.yml up --build -d
+
+docker:
+	docker build -f deploy/Dockerfile --build-arg VERSION=$(VERSION) -t athanor/vault-node:$(VERSION) .
 
 ui:
 	npm --prefix ui install
@@ -32,11 +50,17 @@ ui-embed: ui-build
 	cp -R ui/dist/. internal/webui/dist/
 	touch internal/webui/dist/.gitkeep
 
-# Frameless full-screen dashboard. install-desktop also adds a menu entry.
+# Frameless dashboard window, run from this checkout.
 desktop:
 	npm --prefix ui run build
 	npm --prefix desktop install
 	npm --prefix desktop start
+
+# Installers for this machine's OS land in desktop/dist. CI builds all three.
+desktop-dist:
+	npm --prefix ui run build
+	npm --prefix desktop install
+	npm --prefix desktop run dist
 
 install-desktop:
 	scripts/install-desktop.sh

@@ -10,6 +10,7 @@
 // Admin routes:
 //
 //	GET    /v1/admin/health              this process (answers while stopped)
+//	GET    /v1/admin/ready               200 when a write can reach W, else 503
 //	GET    /v1/admin/cluster             gossiped members and ring version
 //	GET    /v1/admin/overview            members + replica map + metrics
 //	GET    /v1/admin/objects             replica map + metrics
@@ -27,6 +28,14 @@
 //	POST   /v1/admin/fault/{stop,start,block,unblock}   this node only
 //
 // There is no authentication. This API is for a local demo cluster.
+//
+// Fault tolerance at this layer is about staying up under load rather than
+// about replicas: object bodies are held in memory per request, so the
+// number of bodies in flight is capped (Options.MaxInflight) and the excess
+// is refused with 503 and Retry-After instead of being allowed to exhaust
+// memory; a panic in a handler answers 500 for that request only; and every
+// response names the node that produced it, so a load balancer's view can
+// be reconciled with the dashboard's.
 package api
 
 import (
@@ -57,17 +66,24 @@ const Mode = "engine"
 // DefaultMaxUpload caps one object. Peer RPC allows a little more.
 const DefaultMaxUpload = 64 << 20
 
+// DefaultMaxInflight caps object bodies held in memory at once. With the
+// default upload cap that bounds the data plane at 2 GiB of buffers.
+const DefaultMaxInflight = 32
+
 // Options tune the HTTP surface.
 type Options struct {
-	UI        http.Handler // optional dashboard + landing page
-	MaxUpload int64
+	UI          http.Handler // optional dashboard + landing page
+	MaxUpload   int64
+	MaxInflight int    // concurrent object reads and writes; excess gets 503
+	Version     string // reported by / and /v1/admin/health
 }
 
 // Server serves one node's HTTP API.
 type Server struct {
-	node   *node.Node
-	opts   Options
-	client *http.Client
+	node     *node.Node
+	opts     Options
+	client   *http.Client
+	inflight chan struct{}
 }
 
 // NewServer returns the HTTP API for n.
@@ -75,7 +91,18 @@ func NewServer(n *node.Node, opts Options) *Server {
 	if opts.MaxUpload <= 0 {
 		opts.MaxUpload = DefaultMaxUpload
 	}
-	return &Server{node: n, opts: opts, client: &http.Client{Timeout: 5 * time.Second}}
+	if opts.MaxInflight <= 0 {
+		opts.MaxInflight = DefaultMaxInflight
+	}
+	if opts.Version == "" {
+		opts.Version = "dev"
+	}
+	return &Server{
+		node:     n,
+		opts:     opts,
+		client:   &http.Client{Timeout: 5 * time.Second},
+		inflight: make(chan struct{}, opts.MaxInflight),
+	}
 }
 
 // Handler is the HTTP handler, including CORS for the browser dashboard.
@@ -83,6 +110,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/{$}", s.root)
 	mux.HandleFunc("GET /v1/admin/health", s.health)
+	mux.HandleFunc("GET /v1/admin/ready", s.ready)
 	mux.HandleFunc("GET /v1/admin/cluster", s.cluster)
 	mux.HandleFunc("GET /v1/admin/overview", s.overview)
 	mux.HandleFunc("GET /v1/admin/objects", s.objects)
@@ -105,16 +133,18 @@ func (s *Server) Handler() http.Handler {
 	} else {
 		mux.HandleFunc("GET /{$}", s.root)
 	}
-	return withCORS(mux)
+	return s.recover(withCORS(s.stamp(mux)))
 }
 
 func (s *Server) root(w http.ResponseWriter, _ *http.Request) {
 	body := map[string]any{
-		"name":   "athanor",
-		"binary": "vault-node",
-		"node":   s.node.ID(),
-		"mode":   Mode,
-		"health": "/v1/admin/health",
+		"name":    "athanor",
+		"binary":  "vault-node",
+		"version": s.opts.Version,
+		"node":    s.node.ID(),
+		"mode":    Mode,
+		"health":  "/v1/admin/health",
+		"ready":   "/v1/admin/ready",
 	}
 	if s.opts.UI != nil {
 		body["dashboard"] = "/app"
@@ -127,16 +157,89 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":       "ok",
 		"mode":         Mode,
+		"version":      s.opts.Version,
 		"node_id":      h.NodeID,
 		"state":        h.State,
+		"ready":        h.Ready,
+		"ready_reason": h.ReadyReason,
 		"quorum":       h.Quorum,
 		"ring_version": h.RingVersion,
+		"ring_size":    h.RingSize,
+		"live_members": h.LiveMembers,
+		"restarts":     h.Restarts,
 		"booted_at":    h.BootedAt,
 		"started_at":   h.StartedAt,
 		"scrub":        h.Scrub,
 		"scrub_every":  h.Scrub.Interval.Seconds(),
 		"store":        h.Store,
+		"events":       h.Events,
+		"inflight":     len(s.inflight),
+		"max_inflight": s.opts.MaxInflight,
 		"ui":           s.opts.UI != nil,
+	})
+}
+
+// ready is the readiness probe: 200 only while a write from this node can
+// reach W. Health stays 200 while the node is stopped on purpose (the admin
+// API is up and the dashboard needs it); this one does not.
+func (s *Server) ready(w http.ResponseWriter, _ *http.Request) {
+	ok, why := s.node.Ready()
+	status := http.StatusOK
+	if !ok {
+		status = http.StatusServiceUnavailable
+	}
+	writeJSON(w, status, map[string]any{"node_id": s.node.ID(), "ready": ok, "reason": why})
+}
+
+// acquire takes an in-flight slot for an object body, or answers 503 with a
+// Retry-After when the node is already holding MaxInflight bodies.
+func (s *Server) acquire(w http.ResponseWriter, r *http.Request) (release func(), ok bool) {
+	select {
+	case s.inflight <- struct{}{}:
+		return func() { <-s.inflight }, true
+	default:
+	}
+	// Give a queued request a short moment rather than refusing at once.
+	wait := time.NewTimer(250 * time.Millisecond)
+	defer wait.Stop()
+	select {
+	case s.inflight <- struct{}{}:
+		return func() { <-s.inflight }, true
+	case <-r.Context().Done():
+		return nil, false
+	case <-wait.C:
+		w.Header().Set("Retry-After", "1")
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"error": fmt.Sprintf("%s is holding %d object bodies; retry shortly", s.node.ID(), s.opts.MaxInflight),
+			"node":  s.node.ID(),
+			"busy":  true,
+		})
+		return nil, false
+	}
+}
+
+// stamp names the answering node on every response.
+func (s *Server) stamp(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Athanor-Node", s.node.ID())
+		h.Set("X-Content-Type-Options", "nosniff")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// recover answers 500 for a request whose handler panicked, and logs it,
+// instead of letting the connection drop with nothing written.
+func (s *Server) recover(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if p := recover(); p != nil {
+				log.Printf("panic in %s %s: %v", r.Method, r.URL.Path, p)
+				s.node.Log().Emitf("fault", "error", "", "%s recovered from a panic in %s %s: %v", s.node.ID(), r.Method, r.URL.Path, p)
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "internal error", "node": s.node.ID()})
+			}
+		}()
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -241,7 +344,16 @@ func (s *Server) scrub(w http.ResponseWriter, r *http.Request) {
 		writeStopped(w, s.node.ID(), err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"results": res})
+	body := map[string]any{"results": res}
+	var checked, bad, hints, dropped uint64
+	for _, r := range res {
+		checked += r.Checked
+		bad += r.Mismatches
+		hints += r.HintsChecked
+		dropped += r.HintsDropped
+	}
+	body["totals"] = map[string]uint64{"checked": checked, "mismatches": bad, "hints_checked": hints, "hints_dropped": dropped}
+	writeJSON(w, http.StatusOK, body)
 }
 
 func (s *Server) repair(w http.ResponseWriter, r *http.Request) {
@@ -420,6 +532,11 @@ func (s *Server) putObject(w http.ResponseWriter, r *http.Request) {
 	if !s.dataPlaneUp(w) || !validKey(w, key) {
 		return
 	}
+	release, ok := s.acquire(w, r)
+	if !ok {
+		return
+	}
+	defer release()
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.opts.MaxUpload))
 	if err != nil {
 		writeError(w, http.StatusRequestEntityTooLarge, fmt.Errorf("object larger than %d MiB", s.opts.MaxUpload>>20))
@@ -482,6 +599,11 @@ func (s *Server) getObject(w http.ResponseWriter, r *http.Request) {
 	if !s.dataPlaneUp(w) || !validKey(w, key) {
 		return
 	}
+	release, ok := s.acquire(w, r)
+	if !ok {
+		return
+	}
+	defer release()
 	res, err := s.node.Coordinator().Get(r.Context(), key)
 	var qe *replica.QuorumError
 	switch {

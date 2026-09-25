@@ -1,57 +1,46 @@
 import { useRef } from "react";
-import { clamp, useLatest, useReducedMotion, useScrollFrame } from "./hooks.js";
+import { useProgress } from "./hooks.js";
 import { IconArrowUp, IconArrowUpRight, IconBrand, IconGithub } from "./icons.jsx";
-import { REPO_URL } from "./site.js";
+import { DASHBOARD_PATH, REPO_URL } from "./site.js";
 
 const LINKS = [
-  ["Source on GitHub", REPO_URL],
-  ["Design plan (PLAN.md)", `${REPO_URL}/blob/HEAD/PLAN.md`],
+  ["Source", REPO_URL, IconGithub],
+  ["Design plan", `${REPO_URL}/blob/HEAD/PLAN.md`],
   ["README", `${REPO_URL}/blob/HEAD/README.md`],
-  ["Dashboard", "/app"],
+  ["Releases", `${REPO_URL}/releases`],
+  ["Dashboard", DASHBOARD_PATH],
 ];
+
+const NOT_BUILT = ["Raft", "version vectors", "Merkle trees", "erasure coding", "S3"];
 
 export default function Footer() {
   const ref = useRef(null);
-  const lastP = useRef(-1);
-  const reduced = useLatest(useReducedMotion());
-
-  // The furnace rises behind the wordmark as the page ends.
-  useScrollFrame((frame) => {
-    const el = ref.current;
-    if (!el) return undefined;
-    const rect = el.getBoundingClientRect();
-    if (rect.top > frame.vh) {
-      if (lastP.current === 0) return undefined;
-      lastP.current = 0;
-      return () => el.style.setProperty("--fp", "0");
-    }
-    const p = reduced.current ? 1 : clamp((frame.vh - rect.top) / Math.max(1, Math.min(rect.height, frame.vh)));
-    const q = Math.round(p * 1000) / 1000;
-    if (q === lastP.current) return undefined;
-    lastP.current = q;
-    return () => el.style.setProperty("--fp", String(q));
-  });
+  // The wordmark rises out of the furnace as the page ends.
+  useProgress(ref, { start: 1, end: 0.4, name: "--fp" });
 
   return (
     <footer className="ln-footer" ref={ref}>
-      <div className="ln-footer-orb" aria-hidden="true" />
+      <div className="ln-footer-glow" aria-hidden="true" />
       <div className="ln-footer-inner">
         <div className="ln-footer-top">
           <div className="ln-footer-brand">
-            <a className="brand-pill" href="#top">
-              <IconBrand size="1.05em" className="ln-brand-glyph" />
-              Athanor
+            <a className="ln-brand" href="#top">
+              <IconBrand size="1.15em" className="ln-brand-glyph" />
+              <span>Athanor</span>
             </a>
-            <p>The furnace that keeps every copy whole.</p>
+            <p>Six phases in the plan. All of them shipped.</p>
+            <p className="ln-footer-not">
+              Chosen not to build: {NOT_BUILT.join(", ")}.
+            </p>
           </div>
           <nav className="ln-footer-links" aria-label="Project links">
             <ul>
-              {LINKS.map(([label, href]) => (
+              {LINKS.map(([label, href, Icon]) => (
                 <li key={label}>
                   <a href={href}>
-                    {label === "Source on GitHub" ? <IconGithub size="1rem" /> : null}
+                    {Icon ? <Icon size="1rem" /> : null}
                     {label}
-                    <IconArrowUpRight size="0.95rem" />
+                    <IconArrowUpRight size="0.9rem" />
                   </a>
                 </li>
               ))}
@@ -64,9 +53,9 @@ export default function Footer() {
         </p>
 
         <div className="ln-footer-bottom">
-          <p>Illustrations, not live cluster data.</p>
-          <a className="icon-btn" href="#top" aria-label="Back to top">
-            <IconArrowUp size="1.2rem" />
+          <p>Illustrations on this page, not live cluster data. The dashboard is live.</p>
+          <a className="ln-footer-top-btn" href="#top" aria-label="Back to top">
+            <IconArrowUp size="1.1rem" />
           </a>
         </div>
       </div>

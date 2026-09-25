@@ -1,3 +1,6 @@
+// Athanor: a fault-tolerant object store. Four direct dependencies on
+// purpose: gossip, the index, and gRPC. Everything else is the standard
+// library.
 module github.com/Arjun-Walia/Athanor
 
 go 1.25.0

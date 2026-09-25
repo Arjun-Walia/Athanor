@@ -1,20 +1,55 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, DEFAULT_BASE, trimBase } from "./api.js";
+import { api, DEFAULT_BASE, PUBLIC_BASE, isLoopback, trimBase } from "./api.js";
 
 const OVERVIEW_EVERY = 1500;
 const EVENTS_EVERY = 2000;
 const MAX_EVENTS = 800;
 const STORAGE_KEY = "athanor.base";
 
+// Back off while every node is unreachable so a closed laptop does not
+// hammer a dead address, but come back quickly once something answers.
+const OFFLINE_BACKOFF = [2000, 4000, 8000, 15000];
+
+function desktopDefault() {
+  const d = typeof window !== "undefined" ? window.athanorDesktop : null;
+  return d?.defaultBase ? trimBase(d.defaultBase) : null;
+}
+
+/**
+ * Which nodes to try, in order. The origin that served the page comes
+ * first when it is a node (a production build), then whatever the user
+ * connected to last, then the local defaults, then the public cluster.
+ */
 function initialCandidates() {
   const out = [];
+  const { origin } = window.location;
+  const servedByNode = !import.meta.env.DEV && origin.startsWith("http");
+  if (servedByNode) out.push(origin);
   const saved = typeof localStorage !== "undefined" ? localStorage.getItem(STORAGE_KEY) : null;
   if (saved) out.push(saved);
-  // When a node serves this page (a production build), its origin is a node.
-  const { origin } = window.location;
-  if (!import.meta.env.DEV && origin.startsWith("http")) out.push(origin);
+  const fromDesktop = desktopDefault();
+  if (fromDesktop) out.push(fromDesktop);
   out.push(DEFAULT_BASE);
-  return [...new Set(out.map(trimBase))];
+  if (!servedByNode || isLoopback(origin)) out.push(PUBLIC_BASE);
+  return dedupe(out);
+}
+
+function dedupe(urls) {
+  return [...new Set(urls.map(trimBase).filter(Boolean))];
+}
+
+/**
+ * A node's gossiped public URL is only useful from where this page runs. A
+ * page served from the internet cannot reach "http://localhost:8082", and
+ * would otherwise fail over into a wall of timeouts.
+ */
+function usableFromHere(url) {
+  if (!url) return false;
+  const here = window.location.origin;
+  if (!here.startsWith("http")) return true; // desktop shell, file://: try anything
+  if (isLoopback(url) && !isLoopback(here)) return false;
+  if (here.startsWith("https:") && url.startsWith("http:") && !isLoopback(url)) return false; // mixed content
+  return true;
 }
 
 async function firstRunning(candidates, skip) {
@@ -49,6 +84,7 @@ export function useCluster() {
   const knownRef = useRef(initialCandidates());
   const eventMap = useRef(new Map());
   const ringVersion = useRef(null);
+  const misses = useRef(0);
 
   const refresh = useCallback(() => setNonce((n) => n + 1), []);
 
@@ -57,19 +93,22 @@ export function useCluster() {
     baseRef.current = next;
     setBase(next);
     localStorage.setItem(STORAGE_KEY, next);
+    if (!knownRef.current.includes(next)) knownRef.current.unshift(next);
     ringVersion.current = null;
+    misses.current = 0;
     setNonce((n) => n + 1);
   }, []);
 
   const dismissNotice = useCallback(() => setNotice(null), []);
 
-  // Overview loop, with failover.
+  // Overview loop, with failover and offline backoff.
   useEffect(() => {
     let cancelled = false;
     let timer;
     const ctrl = new AbortController();
 
     async function tick() {
+      let delay = OVERVIEW_EVERY;
       if (!baseRef.current) {
         const found = await firstRunning(knownRef.current);
         if (cancelled) return;
@@ -84,13 +123,13 @@ export function useCluster() {
           const ov = await api.overview(current, ctrl.signal);
           if (cancelled) return;
           for (const n of ov.nodes ?? []) {
-            if (n.public_url && !knownRef.current.includes(trimBase(n.public_url))) {
-              knownRef.current.push(trimBase(n.public_url));
-            }
+            const url = trimBase(n.public_url);
+            if (url && usableFromHere(url) && !knownRef.current.includes(url)) knownRef.current.push(url);
           }
           setOverview(ov);
           setStatus("ok");
           setError(null);
+          misses.current = 0;
           if (ringVersion.current !== ov.ring_version) {
             ringVersion.current = ov.ring_version;
             api.ring(current).then((r) => !cancelled && setRing(r)).catch(() => {});
@@ -110,22 +149,34 @@ export function useCluster() {
             baseRef.current = next.base;
             setBase(next.base);
             ringVersion.current = null;
+            misses.current = 0;
           } else {
             setStatus("offline");
             setError(e.message);
+            delay = OFFLINE_BACKOFF[Math.min(misses.current, OFFLINE_BACKOFF.length - 1)];
+            misses.current += 1;
           }
         }
       } else {
         setStatus("offline");
         setError("No node answered.");
+        delay = OFFLINE_BACKOFF[Math.min(misses.current, OFFLINE_BACKOFF.length - 1)];
+        misses.current += 1;
       }
-      if (!cancelled) timer = setTimeout(tick, OVERVIEW_EVERY);
+      if (!cancelled) timer = setTimeout(tick, delay);
     }
 
     tick();
+    const onOnline = () => {
+      misses.current = 0;
+      clearTimeout(timer);
+      tick();
+    };
+    window.addEventListener("online", onOnline);
     return () => {
       cancelled = true;
       clearTimeout(timer);
+      window.removeEventListener("online", onOnline);
       ctrl.abort();
     };
   }, [nonce]);

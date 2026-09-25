@@ -1,5 +1,6 @@
 /*
- * Athanor design tokens, shared by the landing page and the dashboard.
+ * Athanor design tokens, shared by the landing page and the dashboard, plus
+ * the desktop shell's window chrome and install dialog.
  *
  * The palette is warm stone and furnace yellow: a light cream-to-yellow wash,
  * frosted off-white cards, charcoal for "settled" things and yellow for
@@ -412,6 +413,77 @@ html.is-desktop .ln-nav-actions {
   border-radius: var(--pill);
   background: rgba(255, 255, 255, 0.72);
   font-size: 0.8rem;
+}
+
+.desk-downloads {
+  display: grid;
+  gap: 0.4rem;
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.desk-download {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.7rem 0.95rem;
+  border-radius: 1rem;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.75);
+  color: var(--ink);
+  text-decoration: none;
+  transition:
+    background 0.25s,
+    transform 0.35s var(--ease-spring);
+}
+
+.desk-download:hover {
+  background: #fff;
+  transform: translateX(2px);
+}
+
+.desk-download.is-mine {
+  background: var(--dark);
+  color: var(--on-dark);
+  border-color: transparent;
+}
+
+.desk-download-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 500;
+}
+
+.desk-download-tag {
+  padding: 0.1rem 0.5rem;
+  border-radius: var(--pill);
+  background: var(--yellow);
+  color: var(--ink);
+  font-size: 0.7rem;
+  font-weight: 500;
+}
+
+.desk-download-note {
+  font-size: 0.8rem;
+  opacity: 0.75;
+}
+
+.desk-note a {
+  color: inherit;
+}
+
+/* macOS draws its traffic lights top-left; leave them room. */
+html.is-desktop[data-platform="darwin"] .ath-top,
+html.is-desktop[data-platform="darwin"] .ln-nav-bar {
+  padding-left: 5.2rem;
+}
+
+html.is-desktop[data-platform="darwin"] .ath-top-tools,
+html.is-desktop[data-platform="darwin"] .ln-nav-actions {
+  margin-right: 3.2rem;
 }
 
 .desk-cmd {

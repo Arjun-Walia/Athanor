@@ -8,7 +8,9 @@ import (
 )
 
 // LocalPeer serves Peer calls from this node's own store. The gRPC server
-// delegates to it too, so local and remote replicas behave identically.
+// delegates to it too, so local and remote replicas behave identically, and
+// a node that coordinates a write for a key it owns takes the same path as
+// any other owner.
 type LocalPeer struct {
 	Node  string
 	Store *store.Disk
@@ -79,7 +81,7 @@ func (p *LocalPeer) Inventory(_ context.Context) (Inventory, error) {
 	if err != nil {
 		return Inventory{}, err
 	}
-	inv := Inventory{Node: p.Node, Objects: objs, Tampered: p.Store.Tampered(), Bytes: stats.Bytes + stats.HintBytes}
+	inv := Inventory{Node: p.Node, Objects: objs, Tampered: p.Store.Tampered(), Bytes: stats.Bytes + stats.HintBytes, IndexErrors: stats.IndexErrors}
 	for _, h := range hints {
 		inv.Hints = append(inv.Hints, h.Meta)
 	}

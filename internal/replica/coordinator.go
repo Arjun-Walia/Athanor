@@ -76,6 +76,13 @@ type Coordinator struct {
 	log     *events.Log
 	timeout time.Duration
 
+	// Retry is how long to wait before asking a preferred node a second
+	// time when its first answer was an error. One retry covers the usual
+	// transient causes (a connection that was half-open when the peer
+	// restarted, a probe-timeout race) without turning a dead node into a
+	// slow write: the fallback path still runs if the retry fails too.
+	Retry time.Duration
+
 	// OnDivergence is called (asynchronously) when a read finds a reachable
 	// preferred replica that is missing, stale, or corrupt. The node wires it
 	// to Repair, so read-repair uses the same code as the scrubber.
@@ -87,7 +94,25 @@ func NewCoordinator(view View, clock *Clock, log *events.Log, timeout time.Durat
 	if timeout <= 0 {
 		timeout = 3 * time.Second
 	}
-	return &Coordinator{view: view, clock: clock, log: log, timeout: timeout}
+	return &Coordinator{view: view, clock: clock, log: log, timeout: timeout, Retry: 150 * time.Millisecond}
+}
+
+// withRetry runs op, and once more after Retry if it failed and the peer is
+// still considered reachable. A second failure is returned as is.
+func (c *Coordinator) withRetry(ctx context.Context, target string, op func() error) error {
+	err := op()
+	if err == nil || c.Retry <= 0 {
+		return err
+	}
+	select {
+	case <-ctx.Done():
+		return err
+	case <-time.After(c.Retry):
+	}
+	if !c.view.Reachable(target) {
+		return err
+	}
+	return op()
 }
 
 // Put writes body under key and returns after W replicas acknowledge.
@@ -157,7 +182,10 @@ func (c *Coordinator) write(ctx context.Context, op string, meta store.ObjectMet
 			began := time.Now()
 			var lastErr error
 			if c.view.Reachable(target) {
-				_, err := c.view.Peer(target).Replicate(rctx, meta, body, op)
+				err := c.withRetry(rctx, target, func() error {
+					_, err := c.view.Peer(target).Replicate(rctx, meta, body, op)
+					return err
+				})
 				if err == nil {
 					results <- writeOutcome{ok: true, node: target, ack: Ack{Node: target, Took: time.Since(began)}}
 					return
@@ -270,7 +298,12 @@ func (c *Coordinator) Get(ctx context.Context, key string) (ReadResult, error) {
 			defer cancel()
 			var lastErr error
 			if c.view.Reachable(p) {
-				rep, err := c.view.Peer(p).GetReplica(rctx, key, true)
+				var rep Replica
+				err := c.withRetry(rctx, p, func() error {
+					var err error
+					rep, err = c.view.Peer(p).GetReplica(rctx, key, true)
+					return err
+				})
 				if err == nil {
 					results <- readOutcome{cand: readCandidate{node: p, primary: true}, rep: rep}
 					return

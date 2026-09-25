@@ -1,3 +1,6 @@
+// The dashboard's drawings: the live hash ring, the scrub dial, the replica
+// bars, and the activity timeline. All SVG or plain DOM; no chart library.
+
 import { useMemo } from "react";
 import { inkOn, nodeTone, statusMeta } from "./components.jsx";
 import { chipLabel, eventColumn, groupEvents, notable } from "./story.js";
@@ -113,6 +116,9 @@ export function HashRing({ ring, nodes, placement, size = 420 }) {
       </text>
       <text x={cx} y={cy + 20} textAnchor="middle" className="ath-ring-center-sub">
         {ring.tokens.length} vnodes · {ids.length === 1 ? "1 node" : `${ids.length} nodes`}
+      </text>
+      <text x={cx} y={cy + 38} textAnchor="middle" className="ath-ring-center-sub">
+        {ring.digest}
       </text>
     </svg>
   );

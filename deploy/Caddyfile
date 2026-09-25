@@ -1,0 +1,42 @@
+# Gateway for a public Athanor deployment (see docker-compose.public.yml).
+#
+# Plain HTTP on :80; TLS is terminated by the tunnel or CDN in front of it.
+# A node leaves the rotation as soon as its readiness probe fails and comes
+# back when it passes again, so a stopped node never costs a visitor a
+# request. Uploads up to 64 MiB pass straight through.
+
+{
+	auto_https off
+	admin off
+}
+
+:80 {
+	encode zstd gzip
+
+	reverse_proxy node1:8080 node2:8080 node3:8080 node4:8080 node5:8080 {
+		lb_policy round_robin
+		lb_try_duration 5s
+		lb_try_interval 250ms
+
+		health_uri /v1/admin/ready
+		health_interval 5s
+		health_timeout 2s
+		health_status 200
+
+		fail_duration 15s
+		max_fails 1
+		unhealthy_status 5xx
+		unhealthy_latency 10s
+
+		transport http {
+			read_timeout 3m
+			write_timeout 3m
+			dial_timeout 2s
+		}
+	}
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+	}
+}

@@ -132,6 +132,7 @@ export function chipLabel(e) {
       return { title: e.level === "ok" ? "Hint replayed" : "Hint parked", detail: e.key || e.message };
     case "fault":
       if (e.message.includes("flipped a byte")) return { title: "Byte flipped", detail: `${e.key} on ${e.node}` };
+      if (e.message.includes("recovered from a panic")) return { title: "Recovered", detail: e.message };
       if (e.message.includes("stopped")) return { title: `${e.node} stopped`, detail: "gossip + RPC off" };
       if (e.message.includes("is up")) return { title: `${e.node} started`, detail: "rejoining" };
       if (e.message.includes("partition") || e.message.includes("cut")) return { title: "Partition", detail: e.message };
@@ -162,7 +163,7 @@ export function eventColumn(e) {
 export function notable(e) {
   if (e.fields?.change === "boot") return false;
   if (e.kind === "write") return e.level === "error";
-  if (e.kind === "membership") return !!e.subject && e.subject !== "ring";
+  if (e.kind === "membership") return (!!e.subject && e.subject !== "ring") || e.message.includes("no live peer") || e.message.includes("rejoined");
   if (e.kind === "scrub") return e.level !== "ok";
   return true;
 }

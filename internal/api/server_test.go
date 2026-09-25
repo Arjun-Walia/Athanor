@@ -205,3 +205,59 @@ func TestCORSPreflight(t *testing.T) {
 		t.Fatal("version header not exposed to the browser")
 	}
 }
+
+func TestReadyProbe(t *testing.T) {
+	_, srv := single(t)
+	resp, raw := do(t, http.MethodGet, srv.URL+"/v1/admin/ready", "")
+	if resp.StatusCode != http.StatusOK || decode(t, raw)["ready"] != true {
+		t.Fatalf("ready on a healthy single node = %d %s", resp.StatusCode, raw)
+	}
+	if resp.Header.Get("X-Athanor-Node") != "node1" {
+		t.Fatalf("node header = %q", resp.Header.Get("X-Athanor-Node"))
+	}
+	do(t, http.MethodPost, srv.URL+"/v1/admin/fault/stop", "")
+	resp, raw = do(t, http.MethodGet, srv.URL+"/v1/admin/ready", "")
+	if resp.StatusCode != http.StatusServiceUnavailable || decode(t, raw)["reason"] != "stopped" {
+		t.Fatalf("ready while stopped = %d %s", resp.StatusCode, raw)
+	}
+	// Liveness keeps answering 200 so the dashboard can start it again.
+	resp, _ = do(t, http.MethodGet, srv.URL+"/v1/admin/health", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("health while stopped = %d", resp.StatusCode)
+	}
+}
+
+func TestInflightLimitAnswers503WithRetryAfter(t *testing.T) {
+	n, err := node.New(node.Config{
+		ID: "node1", DataDir: t.TempDir(),
+		HTTPAddr: "127.0.0.1:" + port(t), GRPCAddr: "127.0.0.1:" + port(t), GossipAddr: "127.0.0.1:" + port(t),
+		Quorum: replica.Quorum{N: 1, W: 1, R: 1}, Fast: true, Quiet: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Start(); err != nil {
+		t.Fatal(err)
+	}
+	s := NewServer(n, Options{MaxInflight: 1})
+	srv := httptest.NewServer(s.Handler())
+	t.Cleanup(func() {
+		srv.Close()
+		_ = n.Close()
+	})
+	// Hold the only slot, as a slow upload would.
+	s.inflight <- struct{}{}
+	resp, raw := do(t, http.MethodPut, srv.URL+"/v1/objects/x", "x")
+	if resp.StatusCode != http.StatusServiceUnavailable || resp.Header.Get("Retry-After") == "" {
+		t.Fatalf("saturated put = %d %s (Retry-After %q)", resp.StatusCode, raw, resp.Header.Get("Retry-After"))
+	}
+	<-s.inflight
+	resp, _ = do(t, http.MethodPut, srv.URL+"/v1/objects/x", "x")
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("put after the slot freed = %d", resp.StatusCode)
+	}
+	_, raw = do(t, http.MethodGet, srv.URL+"/v1/admin/health", "")
+	if decode(t, raw)["max_inflight"] != float64(1) {
+		t.Fatalf("health max_inflight = %s", raw)
+	}
+}
