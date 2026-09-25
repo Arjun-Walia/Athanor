@@ -152,9 +152,9 @@ html:has(.ln-root) {
 
 .ln-intro {
   margin: 0;
-  max-width: 41rem;
-  font-size: clamp(1.02rem, 1.2vw, 1.15rem);
-  line-height: 1.6;
+  max-width: 28rem;
+  font-size: 1.05rem;
+  line-height: 1.45;
   color: var(--ink-2);
 }
 
@@ -386,6 +386,12 @@ html:has(.ln-root) {
   }
 }
 
+@media (max-width: 42rem) {
+  .ln-nav-actions .ln-btn-ghost {
+    display: none;
+  }
+}
+
 @media (max-width: 30rem) {
   .ln-nav-cta-long {
     display: none;
@@ -432,6 +438,7 @@ html:has(.ln-root) {
 .ln-hero-copy {
   position: relative;
   z-index: 2;
+  max-width: 38rem;
   transform: translate3d(0, calc(var(--hp, 0) * 16vh), 0);
   opacity: calc(1 - var(--hp, 0) * 1.35);
 }
@@ -523,8 +530,8 @@ html:has(.ln-root) {
 }
 
 .ln-lede {
-  max-width: 33rem;
-  margin: 1.75rem 0 0;
+  max-width: 22rem;
+  margin: 1.35rem 0 0;
   font-size: clamp(1.05rem, 1.3vw, 1.22rem);
   line-height: 1.6;
   color: var(--ink-2);
@@ -541,7 +548,7 @@ html:has(.ln-root) {
 
 .ln-hero-visual {
   position: absolute;
-  inset: -6% -2% -4% 42%;
+  inset: -8% -6% -6% 48%;
   z-index: 1;
   pointer-events: none;
   perspective: 75rem;
@@ -714,8 +721,8 @@ html:has(.ln-root) {
 }
 
 .ln-frag-sum {
-  top: 55%;
-  left: 3%;
+  top: 68%;
+  left: 2%;
 }
 
 .ln-frag-node {
@@ -724,8 +731,8 @@ html:has(.ln-root) {
 }
 
 .ln-frag-replicas {
-  top: 84%;
-  right: 2%;
+  top: 78%;
+  right: 7%;
 }
 
 .ln-frag-log {
@@ -1067,9 +1074,15 @@ html:has(.ln-root) {
   color: var(--ln-muted);
 }
 
+@media (max-width: 100rem) {
+  .ln-frag-log {
+    display: none;
+  }
+}
+
 @media (max-width: 71.99rem) {
   .ln-hero-visual {
-    left: 46%;
+    left: 52%;
   }
 
   .ln-frag-log {

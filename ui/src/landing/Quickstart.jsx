@@ -55,12 +55,12 @@ function Command({ cmd }) {
 }
 
 const DEMO = [
-  { title: "Open the dashboard", note: "Five nodes, all alive. The ring is drawn from membership.", Icon: IconServer },
-  { title: "Upload report.pdf", note: "Its row shows replica dots on three nodes.", Icon: IconFile },
-  { title: "Kill node2", note: "Its card turns red and says dead. The download still works: R = 2.", Icon: IconPower },
-  { title: "Corrupt node3’s copy", note: "The next get or scrub logs a mismatch, then a repair from a good replica.", Icon: IconZap },
-  { title: "Start node2", note: "Hint replay or rebalance runs, and its dot comes back.", Icon: IconPlay },
-  { title: "Drag W from 2 to 3", note: "On the Durability page. The next upload waits for three acks.", Icon: IconSliders },
+  { title: "Open the dashboard", note: "Five nodes. One ring.", Icon: IconServer },
+  { title: "Upload a file", note: "Three replica dots.", Icon: IconFile },
+  { title: "Kill a node", note: "The read still returns.", Icon: IconPower },
+  { title: "Corrupt a copy", note: "Watch it heal.", Icon: IconZap },
+  { title: "Start the node", note: "The dot comes back.", Icon: IconPlay },
+  { title: "Raise W to 3", note: "The next write waits.", Icon: IconSliders },
 ];
 
 function DemoChecklist() {
@@ -73,7 +73,7 @@ function DemoChecklist() {
       <div className="ln-demo-head">
         <div>
           <h3 className="ln-demo-title">The 90-second demo</h3>
-          <p className="ln-demo-sub">The judging script from PLAN.md. The dashboard ticks it off from live events; this copy is yours.</p>
+          <p className="ln-demo-sub">Six steps. The dashboard ticks them off live.</p>
         </div>
         <p className="ln-demo-count num" aria-live="polite">
           {count}
@@ -125,12 +125,9 @@ export default function Quickstart() {
           <span className="ln-eyebrow-num">05</span> Quickstart
         </p>
         <h2 id="ln-start-title" className="ln-h2">
-          Light it on your own machine.
+          Light it.
         </h2>
-        <p className="ln-intro">
-          Docker is enough to run it. Without Docker, Go 1.25+ and one script start five local processes that
-          serve the same dashboard.
-        </p>
+        <p className="ln-intro">Docker, or five local processes.</p>
       </header>
 
       <div className="ln-start-grid" ref={bodyRef}>

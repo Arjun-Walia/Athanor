@@ -281,9 +281,8 @@ function NodesAccordion({ ov, actions, go }) {
       <Disclosure title="Honest overhead" meta={m.objects ? `${m.overhead.toFixed(1)}×` : "—"}>
         <p className="ath-prose">
           {m.objects
-            ? `${bytes(m.physical_bytes)} on disk for ${bytes(m.logical_bytes)} of objects: ${m.overhead.toFixed(2)}× measured, ${m.policy_overhead}× by policy (N=${ov.config.quorum.n}).`
-            : `Each object is stored ${m.policy_overhead}× (N=${ov.config.quorum.n}).`}{" "}
-          Erasure coding such as RS(4,2) would cost about 1.5×. Athanor does not implement it.
+            ? `${bytes(m.physical_bytes)} on disk for ${bytes(m.logical_bytes)}. ${m.overhead.toFixed(1)}× measured.`
+            : `${m.policy_overhead}× by policy.`}
         </p>
       </Disclosure>
       <Disclosure title="Nodes" defaultOpen meta={`${nodes.filter((n) => n.status === "alive").length}/${nodes.length}`}>
@@ -328,24 +327,20 @@ function NodesAccordion({ ov, actions, go }) {
       <Disclosure title="Partitions" meta={parts.length ? `${parts.length} cut` : "none"}>
         {parts.length ? (
           <div className="ath-prose">
-            <p>
-              {ov.coordinator} cannot reach {parts.join(", ")}. SWIM keeps them alive through indirect probes; writes route
-              around them as hints.
-            </p>
+            <p>Cut off from {parts.join(", ")}.</p>
             <button type="button" className="ath-pill-action" onClick={actions.heal}>
               <Icon.Link size={15} /> Heal all partitions
             </button>
           </div>
         ) : (
-          <p className="ath-prose">No links are cut. Create one from the Nodes page.</p>
+          <p className="ath-prose">None. Cut one from Nodes.</p>
         )}
       </Disclosure>
       <Disclosure title="Rebalance" meta={ov.rebalance?.at && Date.parse(ov.rebalance.at) > 0 ? `${ov.rebalance.copied} moved` : "idle"}>
         <p className="ath-prose">
           {ov.rebalance?.at && Date.parse(ov.rebalance.at) > Date.parse("2001-01-01")
-            ? `Last pass on ${ov.coordinator} (${ov.rebalance.why}) checked ${ov.rebalance.checked}, copied ${ov.rebalance.copied}, dropped ${ov.rebalance.dropped}.`
-            : "No pass yet. It runs when the ring changes and every 30 seconds as anti-entropy."}{" "}
-          Copies are rate-limited so repair never starves client traffic.
+            ? `${ov.rebalance.copied} copied · ${ov.rebalance.dropped} dropped`
+            : "When the ring changes, and every 30s."}
         </p>
       </Disclosure>
     </Card>

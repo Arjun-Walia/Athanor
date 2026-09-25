@@ -112,7 +112,7 @@ export function HashRing({ ring, nodes, placement, size = 420 }) {
         v{ring.version}
       </text>
       <text x={cx} y={cy + 20} textAnchor="middle" className="ath-ring-center-sub">
-        {ring.tokens.length} vnodes · {ids.length} nodes
+        {ring.tokens.length} vnodes · {ids.length === 1 ? "1 node" : `${ids.length} nodes`}
       </text>
     </svg>
   );

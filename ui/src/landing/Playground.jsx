@@ -132,13 +132,9 @@ export default function Playground() {
           <span className="ln-eyebrow-num">03</span> Quorum playground
         </p>
         <h2 id="ln-quorum-title" className="ln-h2">
-          Pick your N, W and R. See what they buy.
+          N, W, and R.
         </h2>
-        <p className="ln-intro">
-          If W + R is greater than N, every set of R replicas shares at least one node with every set of W, so a read
-          always meets the latest acknowledged write. This is arithmetic in your browser; it does not talk to a
-          cluster.
-        </p>
+        <p className="ln-intro">W + R &gt; N, and a read meets the last write.</p>
       </header>
 
       <div className="ln-play" ref={bodyRef}>
@@ -172,13 +168,11 @@ export default function Playground() {
             <p>
               {ok ? (
                 <>
-                  <b>Reads meet writes.</b> W + R = {w + r} &gt; {n}: at least {overlap}{" "}
-                  {plural(overlap, "replica is", "replicas are")} in both sets.
+                  <b>Reads meet writes.</b> Overlap of {overlap}.
                 </>
               ) : (
                 <>
-                  <b>No guaranteed overlap.</b> W + R = {w + r} ≤ {n}: a read can land only on replicas that missed the
-                  latest write and return an older version until repair catches up.
+                  <b>No overlap.</b> A read can miss the newest write.
                 </>
               )}
             </p>
@@ -221,11 +215,7 @@ export default function Playground() {
               );
             })}
           </ul>
-          <p className="ln-play-fine">
-            Worst case shown: the read set is placed as far from the write set as it can be. During failures a hinted
-            copy can sit outside the preference list until it is replayed, so the overlap is firmest when the preferred
-            nodes are up.
-          </p>
+          <p className="ln-play-fine">Worst case. The read set sits as far from the write set as it can.</p>
         </div>
 
         <div className="ln-over ln-reveal" style={{ "--i": 2 }}>

@@ -12,6 +12,9 @@ data/
 ui/node_modules/
 ui/dist/
 
+# Desktop shell
+desktop/node_modules/
+
 # Secrets and local env
 .env
 .env.*

@@ -50,9 +50,9 @@ const PHASES = [
     id: "F",
     name: "Polish",
     share: 5,
-    items: ["3/2/2 default plus a live slider", "Metrics card: 3.0× overhead, last repair, under-replicated", "README and demo script"],
-    exit: "Electron only if the demo already works.",
-    proof: "slider, metrics, README built; Electron skipped",
+    items: ["3/2/2 default plus a live slider", "Metrics: overhead, last repair, under-replicated", "Frameless desktop shell"],
+    exit: "The dashboard opens full screen, with no window border.",
+    proof: "make install-desktop",
   },
 ];
 
@@ -167,11 +167,7 @@ export default function Phases() {
                 Engine first. UI last.
               </h2>
             </div>
-            <p className="ln-intro">
-              Six phases from PLAN.md, each with an exit test, built in order so nothing later could eat an earlier
-              phase. All six have landed. Each card names where its exit test runs; Electron was skipped, as the
-              plan allows.
-            </p>
+            <p className="ln-intro">Six phases, in order. All of them shipped.</p>
           </header>
 
           <div className="ln-minimap" aria-hidden="true">
@@ -185,7 +181,7 @@ export default function Phases() {
             ))}
             <span className="ln-mm-progress" />
           </div>
-          <p className="ln-mm-caption">Planned share of build time, from the plan</p>
+          <p className="ln-mm-caption">Share of the build</p>
 
           <ol className="ln-track" ref={trackRef}>
             {PHASES.map((ph, i) => (

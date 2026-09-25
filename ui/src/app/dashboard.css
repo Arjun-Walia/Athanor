@@ -6,34 +6,42 @@
 
 .ath-app {
   min-height: 100vh;
-  padding: 1.5rem;
+  min-height: 100dvh;
+  padding: 0;
   background:
-    radial-gradient(60rem 40rem at 10% -10%, #c7cad1 0%, rgba(199, 202, 209, 0) 70%),
-    linear-gradient(160deg, #b3b7c0 0%, #a4a8b2 100%);
+    radial-gradient(70% 55% at 100% 100%, rgba(248, 222, 128, 0.95) 0%, rgba(248, 222, 128, 0) 70%),
+    radial-gradient(50% 50% at 85% 18%, rgba(247, 238, 208, 0.9) 0%, rgba(247, 238, 208, 0) 70%),
+    linear-gradient(135deg, #e7e7e5 0%, #eeede9 38%, #f4efdf 68%, #f6e6a9 100%);
 }
 
 .ath-frame {
+  --ath-pad: clamp(1.1rem, 2.2vw, 2rem);
   position: relative;
-  max-width: 94rem;
-  margin: 0 auto;
-  padding: 1.5rem 2rem 2.25rem;
-  border-radius: 2.75rem;
-  background:
-    radial-gradient(70% 55% at 100% 100%, rgba(248, 222, 128, 0.95) 0%, rgba(248, 222, 128, 0) 70%),
-    radial-gradient(50% 50% at 85% 30%, rgba(247, 238, 208, 0.9) 0%, rgba(247, 238, 208, 0) 70%),
-    linear-gradient(135deg, #e7e7e5 0%, #eeede9 38%, #f4efdf 68%, #f6e6a9 100%);
-  box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.8) inset,
-    0 50px 90px -50px rgba(30, 34, 44, 0.55);
+  max-width: none;
+  margin: 0;
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding: 0 var(--ath-pad) 2.25rem;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 /* ---------- top bar ---------- */
 
 .ath-top {
+  position: sticky;
+  top: 0;
+  z-index: 30;
   display: grid;
   grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 1rem;
+  margin: 0 calc(var(--ath-pad) * -1);
+  padding: 0.85rem var(--ath-pad) 0.7rem;
+  background: linear-gradient(180deg, rgba(236, 234, 226, 0.72), rgba(236, 234, 226, 0));
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
 }
 
 .ath-brand {
@@ -66,6 +74,7 @@
   align-items: center;
   gap: 0.5rem;
   padding: 0.8rem 1.2rem;
+  border: 0;
   border-radius: var(--pill);
   background: var(--card-strong);
   box-shadow: var(--shadow-card);
@@ -141,7 +150,7 @@
 }
 
 .ath-hero {
-  margin: 2.4rem 0 1.6rem;
+  margin: 1.35rem 0 1.35rem;
 }
 
 .ath-headline {
@@ -196,6 +205,16 @@
 }
 
 /* ---------- cards ---------- */
+
+.ath-grid > *,
+.ath-card {
+  min-width: 0;
+}
+
+.ath-timeline {
+  max-width: 100%;
+  overflow-x: auto;
+}
 
 .ath-card {
   position: relative;
@@ -2500,8 +2519,8 @@
   }
 
   .ath-frame {
-    border-radius: 0;
-    padding: 1rem 0.9rem 5rem;
+    --ath-pad: 0.9rem;
+    padding-bottom: 5rem;
   }
 
   .ath-setting span,

@@ -42,10 +42,7 @@ export default function Footer() {
               <IconBrand size="1.05em" className="ln-brand-glyph" />
               Athanor
             </a>
-            <p>
-              An athanor is the alchemist&rsquo;s furnace, built to hold a steady heat for as long as the work takes.
-              This one keeps copies of your data whole.
-            </p>
+            <p>The furnace that keeps every copy whole.</p>
           </div>
           <nav className="ln-footer-links" aria-label="Project links">
             <ul>
@@ -67,10 +64,7 @@ export default function Footer() {
         </p>
 
         <div className="ln-footer-bottom">
-          <p>
-            Everything that moves on this page is an illustration of the algorithm, not data from a running cluster.
-            The node binary is <code>vault-node</code>; the plan&rsquo;s working title was Vault.
-          </p>
+          <p>Illustrations, not live cluster data.</p>
           <a className="icon-btn" href="#top" aria-label="Back to top">
             <IconArrowUp size="1.2rem" />
           </a>

@@ -2,7 +2,7 @@
 
 Athanor is a fault-tolerant distributed object store. Independent nodes replicate objects with a Dynamo-style quorum, detect failure with SWIM gossip, and repair corruption themselves. The dashboard lets you see every replica, kill a node, and watch a bad copy heal.
 
-The design document is [PLAN.md](PLAN.md). It uses the working title Vault, and the node binary is still called `vault-node`. Every phase in the plan (A to F) is built. The one exception is the optional Electron shell, which is skipped.
+The design document is [PLAN.md](PLAN.md). It uses the working title Vault, and the node binary is still called `vault-node`. Every phase in the plan (A to F) is built, including the frameless desktop shell.
 
 ## Run it
 
@@ -24,6 +24,14 @@ scripts/local-cluster.sh
 `CLEAN=1` wipes `./data/local` first. `NODES=6` starts a sixth node too. Stopping the script with Ctrl-C stops every node.
 
 **Dashboard development:** run `cd ui && npm install && npm run dev`, then open http://localhost:5173/app. The dev server talks to `http://localhost:8081` by default. The plug icon in the top bar switches to another node.
+
+**Desktop** (frameless, full screen, no window border):
+
+```bash
+make install-desktop
+```
+
+That adds an application menu entry and opens the dashboard. `make desktop` launches it without installing.
 
 **One process:** `make run` starts a single node with N=W=R=1. A write cannot wait for replicas that don't exist.
 

@@ -1,9 +1,7 @@
 import { Fragment, useRef } from "react";
 import { clamp, useLatest, usePointerParallax, useReducedMotion, useScrollFrame } from "./hooks.js";
 import {
-  IconArrowDown,
   IconArrowUpRight,
-  IconBox,
   IconCheck,
   IconEye,
   IconFile,
@@ -12,6 +10,7 @@ import {
   IconServer,
   IconShield,
 } from "./icons.jsx";
+import { InstallButton } from "../shell.jsx";
 
 const HEADLINE = [
   ["Storage", "that", "keeps"],
@@ -21,11 +20,11 @@ const HEADLINE = [
 const LINE_START = HEADLINE.map((_, li) => HEADLINE.slice(0, li).reduce((n, line) => n + line.length, 0));
 
 const STATS = [
-  { n: "3", label: "copies of every object", sub: "N", Icon: IconLayers },
-  { n: "2", label: "acks before a write returns", sub: "W", Icon: IconCheck },
-  { n: "2", label: "replicas behind every read", sub: "R", Icon: IconEye },
-  { n: "64", label: "vnodes per node on the ring", sub: "", Icon: IconRing },
-  { n: "5", label: "nodes in the compose topology", sub: "", Icon: IconServer },
+  { n: "3", label: "copies", sub: "N", Icon: IconLayers },
+  { n: "2", label: "write acks", sub: "W", Icon: IconCheck },
+  { n: "2", label: "reads", sub: "R", Icon: IconEye },
+  { n: "64", label: "vnodes", sub: "", Icon: IconRing },
+  { n: "5", label: "nodes", sub: "", Icon: IconServer },
 ];
 
 // Tick marks for the dial that circles the furnace orb.
@@ -85,10 +84,8 @@ export default function Hero() {
       <div className="ln-hero-inner">
         <div className="ln-hero-copy">
           <p className="ln-hero-tags">
-            <span className="chip outline">
-              <IconBox size="0.95rem" /> Source on GitHub · written in Go
-            </span>
-            <span className="chip yellow">N 3 · W 2 · R 2 by default</span>
+            <span className="chip outline">Go</span>
+            <span className="chip yellow">3 · 2 · 2</span>
           </p>
 
           <h1 id="ln-hero-title" className="ln-h1">
@@ -112,19 +109,13 @@ export default function Hero() {
             ))}
           </h1>
 
-          <p className="ln-lede">
-            Athanor is a fault-tolerant object store. Each object is copied to three nodes, each copy carries a SHA-256,
-            and when a node dies or a byte rots, the cluster notices and puts it right. The dashboard lets you watch it
-            happen.
-          </p>
+          <p className="ln-lede">Three copies. A bad byte heals itself.</p>
 
           <div className="ln-hero-ctas">
             <a className="ln-btn ln-btn-dark ln-btn-lg" href="/app">
-              Open the dashboard <IconArrowUpRight size="1.1rem" />
+              Open dashboard <IconArrowUpRight size="1.1rem" />
             </a>
-            <a className="ln-btn ln-btn-ghost ln-btn-lg" href="#story">
-              Follow a write through a failure <IconArrowDown size="1.1rem" />
-            </a>
+            <InstallButton className="ln-btn ln-btn-ghost ln-btn-lg">Install</InstallButton>
           </div>
         </div>
 
@@ -261,9 +252,6 @@ export default function Hero() {
             </li>
           ))}
         </ul>
-        <p className="ln-hero-caption">
-          The floating pieces are drawn from the dashboard to show what it looks like. They are not live data.
-        </p>
       </div>
     </section>
   );

@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef } from "react";
 import { useActiveSection, useScrollFrame } from "./hooks.js";
 import { IconArrowUpRight, IconBrand, IconGithub } from "./icons.jsx";
+import { InstallButton } from "../shell.jsx";
 import { REPO_URL } from "./site.js";
 
 const SECTIONS = [
@@ -78,6 +79,7 @@ export default function Nav() {
           <a className="icon-btn ln-nav-gh" href={REPO_URL} aria-label="Athanor source on GitHub">
             <IconGithub size="1.3rem" />
           </a>
+          <InstallButton className="ln-btn ln-btn-ghost ln-nav-cta">Install</InstallButton>
           <a className="ln-btn ln-btn-dark ln-nav-cta" href="/app">
             <span className="ln-nav-cta-long">Open dashboard</span>
             <span className="ln-nav-cta-short">Dashboard</span>

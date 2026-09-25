@@ -265,6 +265,189 @@ a {
   background-image: var(--hatch);
 }
 
+/* Desktop shell: frameless window controls and the install dialog.
+   Present on both the landing page and the dashboard. */
+
+.desk-chrome {
+  display: none;
+}
+
+html.is-desktop .desk-chrome {
+  position: fixed;
+  z-index: 80;
+  top: 0.65rem;
+  right: 0.7rem;
+  display: flex;
+  gap: 0.35rem;
+  -webkit-app-region: no-drag;
+}
+
+html.is-desktop .ath-top,
+html.is-desktop .ln-nav-bar {
+  -webkit-app-region: drag;
+}
+
+html.is-desktop .ath-top :is(a, button, input, label),
+html.is-desktop .ln-nav-bar :is(a, button, input, label) {
+  -webkit-app-region: no-drag;
+}
+
+html.is-desktop .ath-top-tools,
+html.is-desktop .ln-nav-actions {
+  margin-right: 7.4rem;
+}
+
+.desk-winbtn,
+.desk-x {
+  display: grid;
+  place-items: center;
+  width: 2.15rem;
+  height: 2.15rem;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--ink);
+  box-shadow: var(--shadow-card);
+}
+
+.desk-winbtn:hover,
+.desk-x:hover {
+  background: #fff;
+}
+
+.desk-winbtn.is-close:hover {
+  background: var(--dead);
+  color: #fff;
+}
+
+.desk-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+  background: rgba(29, 29, 27, 0.38);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.desk-dialog {
+  position: relative;
+  width: min(26rem, 100%);
+  padding: 1.15rem 1.15rem 1.25rem;
+  border-radius: 1.7rem;
+  background:
+    radial-gradient(90% 70% at 100% 0%, rgba(246, 207, 69, 0.55), transparent 58%),
+    #fbfaf6;
+  box-shadow: var(--shadow-float);
+  color: var(--ink);
+}
+
+.desk-x {
+  position: absolute;
+  top: 0.85rem;
+  right: 0.85rem;
+  z-index: 1;
+}
+
+.desk-preview {
+  position: relative;
+  height: 8.5rem;
+  margin-bottom: 1rem;
+  overflow: hidden;
+  border-radius: 1.15rem;
+  background:
+    radial-gradient(40% 70% at 62% 70%, rgba(246, 207, 69, 0.95), transparent 70%),
+    linear-gradient(155deg, #e7e7e5 0%, #f4efdf 55%, #f6e6a9 100%);
+}
+
+.desk-preview-orb {
+  position: absolute;
+  left: 50%;
+  top: 58%;
+  width: 4.4rem;
+  height: 4.4rem;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(circle at 34% 30%, #fffbea 0%, #f6cf45 46%, #c98412 100%);
+  box-shadow: 0 0 36px 10px rgba(246, 207, 69, 0.55);
+}
+
+.desk-kicker {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 550;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.desk-dialog h2 {
+  margin: 0.15rem 0 0.3rem;
+  font-size: 2.35rem;
+  font-weight: 300;
+  letter-spacing: -0.045em;
+  line-height: 1;
+}
+
+.desk-dialog p {
+  margin: 0;
+  color: var(--ink-2);
+}
+
+.desk-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.85rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.desk-facts li {
+  padding: 0.28rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: var(--pill);
+  background: rgba(255, 255, 255, 0.72);
+  font-size: 0.8rem;
+}
+
+.desk-cmd {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-top: 1rem;
+  padding: 0.35rem 0.35rem 0.35rem 0.95rem;
+  border-radius: var(--pill);
+  background: var(--dark);
+  color: var(--on-dark);
+}
+
+.desk-cmd code {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+}
+
+.desk-cmd button {
+  flex: none;
+  border: 0;
+  border-radius: var(--pill);
+  padding: 0.5rem 0.85rem;
+  background: var(--yellow);
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.desk-note {
+  margin-top: 0.7rem !important;
+  font-size: 0.8rem;
+  color: var(--muted) !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

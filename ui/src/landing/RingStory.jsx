@@ -300,9 +300,7 @@ const STEPS = [
     title: "A name becomes a place",
     body: (
       <>
-        A client sends <code>report.pdf</code> to any node, and that node coordinates the call. It hashes the key
-        with SHA-256 and reads the first 64 bits as a position on the ring. No central index is asked: every node can
-        do this sum on its own and get the same answer.
+        Any node hashes <code>report.pdf</code> onto the ring.
       </>
     ),
     facts: ["SHA-256", "any node coordinates", "no central index"],
@@ -312,9 +310,7 @@ const STEPS = [
     title: "Walk clockwise to three machines",
     body: (
       <>
-        Every node owns 64 virtual points on the ring, so its share is scattered rather than one slab. From the key,
-        the coordinator walks clockwise and collects owners. A point that belongs to a node already on the list is
-        skipped, because the preference list needs <strong>N = 3</strong> distinct machines. Here: node1, node2, node3.
+        Clockwise to three owners. node1, node2, node3.
       </>
     ),
     facts: ["64 vnodes per node", "N = 3", "preference list"],
@@ -322,50 +318,25 @@ const STEPS = [
   {
     short: "Write",
     title: "Answer after two",
-    body: (
-      <>
-        The coordinator sends the object to all three at once, with the SHA-256 of its bytes and a last-writer-wins
-        version. It answers <strong>201 Created</strong> as soon as <strong>W = 2</strong> replicas have acknowledged.
-        The third copy still lands; the client just does not wait for it.
-      </>
-    ),
+    body: <>All three are written. The client returns after two.</>,
     facts: ["W = 2", "201 Created", "LWW version"],
   },
   {
     short: "Fail",
     title: "Lose a node, keep the data",
-    body: (
-      <>
-        node2 stops answering. SWIM gossip notices the missed probes: node2 is marked <em>suspect</em>, then{" "}
-        <em>dead</em>. A new version written now cannot reach it, so node4, the next healthy node on the walk, takes
-        the copy with a hint that says whose it really is. Reads still collect <strong>R = 2</strong> good replicas
-        from node1 and node3.
-      </>
-    ),
+    body: <>node2 dies. node4 keeps its copy, and the read still finds two.</>,
     facts: ["SWIM gossip", "suspect → dead", "sloppy quorum", "R = 2"],
   },
   {
     short: "Heal",
     title: "Catch the flipped byte",
-    body: (
-      <>
-        One byte of node3&rsquo;s copy changes on disk. The scrubber rehashes local files on a timer, and every read
-        checks too. The SHA-256 no longer matches, so <code>Repair(key)</code> picks the winner, the highest version
-        whose checksum is intact, which is on node1, and pushes it back to node3.
-      </>
-    ),
+    body: <>A flipped byte fails its checksum. node1 pushes the good copy back.</>,
     facts: ["scrubber", "checksum mismatch", "Repair(key)"],
   },
   {
     short: "Return",
     title: "Come back whole",
-    body: (
-      <>
-        node2 answers gossip again and is marked alive. node4 replays the hint it parked, hands node2 the version it
-        missed, and drops its stand-in copy. All three preferred replicas hold the same version and the same checksum.
-        The fire never went out.
-      </>
-    ),
+    body: <>node2 returns. The hint replays, and all three copies match.</>,
     facts: ["hint replay", "ring version", "3 of 3 replicas"],
   },
 ];
@@ -596,11 +567,7 @@ export default function RingStory() {
         <h2 id="ln-story-title" className="ln-h2">
           Follow one file through a bad day.
         </h2>
-        <p className="ln-intro">
-          Scroll to step through the algorithm. The ring on this page is a drawing of how Athanor places, copies and
-          repairs an object, not a view of a running cluster. It shows 12 vnodes per node so the walk is easy to see;
-          Athanor gives each node 64.
-        </p>
+        <p className="ln-intro">Scroll. One file, from the write to the repair.</p>
       </header>
 
       <div className="ln-story-body" ref={bodyRef}>

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import "./dashboard.css";
 import { Icon } from "./icons.jsx";
 import { Menu, MenuItem, MenuLabel, Toasts } from "./components.jsx";
+import { InstallButton } from "../shell.jsx";
 import { api, DEFAULT_BASE } from "./api.js";
 import { useCluster, useNow } from "./useCluster.js";
 import Overview from "./pages/Overview.jsx";
@@ -167,6 +168,9 @@ export default function Dashboard() {
             ))}
           </nav>
           <div className="ath-top-tools">
+            <InstallButton className="ath-setting">
+              <Icon.Download size={18} /> Install
+            </InstallButton>
             <a
               href={pathFor("durability")}
               className={`ath-setting${page === "durability" ? " is-active" : ""}`}
@@ -242,12 +246,10 @@ function Connect({ status, error, base, onConnect }) {
       <div className="ath-connect-orb" aria-hidden="true">
         <span className="ath-orb" />
       </div>
-      <h1 className="ath-headline">{status === "connecting" ? "Finding a node…" : "No node is answering"}</h1>
+      <h1 className="ath-headline">{status === "connecting" ? "Finding a node" : "No node"}</h1>
       {status !== "connecting" ? (
         <>
-          <p className="ath-lede">
-            {error ? `${error}. ` : ""}Start a cluster, then point the dashboard at any node's HTTP port. Any node can coordinate.
-          </p>
+          <p className="ath-lede">{error ? `${error}. ` : ""}Any node can coordinate.</p>
           <pre className="ath-code">
             <code>{"docker compose -f deploy/docker-compose.yml up --build\n# or, without Docker:\nscripts/local-cluster.sh"}</code>
           </pre>

@@ -189,32 +189,28 @@ export default function Objects({ ov, ring, events, actions, now }) {
   return (
     <div className="ath-page ath-objects">
       <div className="ath-hero">
-        <h1 className="ath-headline">Objects and where every copy lives</h1>
+        <h1 className="ath-headline">Objects</h1>
       </div>
       <div className="ath-metrics">
         <Metric
           icon="Layers"
           label="Storage overhead"
           value={m.objects ? `${m.overhead.toFixed(2)}×` : `${m.policy_overhead}×`}
-          note={
-            m.complete
-              ? `${m.policy_overhead}× by policy. RS(4,2) would be ~1.5×; not built.`
-              : "Partial: a node did not answer, so its bytes are not counted."
-          }
+          note={m.complete ? `${m.policy_overhead}× policy` : "Partial count"}
         />
         <Metric
           icon="Heal"
           label="Last repair"
           value={lastRepair ? ms(Number(lastRepair.fields.micros) / 1000) : "—"}
-          note={lastRepair ? `${lastRepair.key} · ${ago(lastRepair.t, now)}` : "Nothing has needed healing yet."}
+          note={lastRepair ? `${lastRepair.key} · ${ago(lastRepair.t, now)}` : "None yet"}
         />
         <Metric
           icon="ShieldAlert"
           label="Under-replicated"
           value={m.under_replicated}
-          note={m.complete ? "Fewer verified copies than N on owners." : "Some nodes did not answer; count is partial."}
+          note={m.complete ? "Below N verified copies" : "Partial"}
         />
-        <Metric icon="Clock" label="Hints parked" value={m.hints} note="Writes waiting for an owner to come back." />
+        <Metric icon="Clock" label="Hints parked" value={m.hints} note="Waiting on a down owner" />
       </div>
       <div className="ath-objects-layout">
         <Uploader actions={actions} quorum={ov.config.quorum} />

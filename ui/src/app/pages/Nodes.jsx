@@ -177,10 +177,10 @@ export default function Nodes({ ov, ring, base, actions, now }) {
   return (
     <div className="ath-page ath-nodes">
       <div className="ath-hero">
-        <h1 className="ath-headline">The ring</h1>
+        <h1 className="ath-headline">Ring</h1>
         <p className="ath-lede">
-          {ids.length} nodes × {ring ? ring.tokens.length / Math.max(1, ids.length) : "…"} virtual nodes. Every node computes placement
-          from gossiped membership; there is no central index.
+          {ids.length === 1 ? "1 node" : `${ids.length} nodes`}
+          {ring ? ` · ${Math.round(ring.tokens.length / Math.max(1, ids.length))} vnodes` : ""}
         </p>
       </div>
       <div className="ath-nodes-layout">
@@ -209,8 +209,7 @@ export default function Nodes({ ov, ring, base, actions, now }) {
             <Card className="ath-partition-note">
               <Icon.Scissors size={18} />
               <p>
-                <strong>{ov.coordinator}</strong> is cut off from {parts.join(", ")}. Other nodes still reach them, so SWIM keeps them
-                alive through indirect probes.
+                <strong>{ov.coordinator}</strong> is cut off from {parts.join(", ")}.
               </p>
               <button type="button" className="ath-pill-action is-dark" onClick={actions.heal}>
                 <Icon.Link size={15} /> Heal

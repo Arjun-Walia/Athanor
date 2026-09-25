@@ -1,4 +1,4 @@
-.PHONY: build test run cluster compose ui ui-build ui-embed proto
+.PHONY: build test run cluster compose ui ui-build ui-embed proto desktop install-desktop
 
 build:
 	go build -o bin/vault-node ./cmd/vault-node
@@ -31,6 +31,15 @@ ui-embed: ui-build
 	rm -rf internal/webui/dist && mkdir -p internal/webui/dist
 	cp -R ui/dist/. internal/webui/dist/
 	touch internal/webui/dist/.gitkeep
+
+# Frameless full-screen dashboard. install-desktop also adds a menu entry.
+desktop:
+	npm --prefix ui run build
+	npm --prefix desktop install
+	npm --prefix desktop start
+
+install-desktop:
+	scripts/install-desktop.sh
 
 proto:
 	protoc --go_out=. --go_opt=module=github.com/Arjun-Walia/Athanor \

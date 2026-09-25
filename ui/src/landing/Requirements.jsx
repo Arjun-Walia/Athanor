@@ -24,7 +24,7 @@ const CARDS = [
   {
     need: "Replication",
     Icon: IconLayers,
-    how: "A preference list of N nodes. The coordinator writes to all N and answers after W acknowledge.",
+    how: "Write to N. Return after W.",
     pkg: "internal/replica",
     demo: (
       <div className="ln-mini-row">
@@ -45,7 +45,7 @@ const CARDS = [
   {
     need: "Retrieval",
     Icon: IconEye,
-    how: "Read R replicas and return the highest version whose checksum still matches.",
+    how: "Newest copy whose checksum matches.",
     pkg: "internal/replica",
     demo: (
       <div className="ln-mini-row">
@@ -62,7 +62,7 @@ const CARDS = [
   {
     need: "Node failures",
     Icon: IconPulse,
-    how: "SWIM gossip through hashicorp/memberlist. After missed probes a node goes Suspect, then Dead.",
+    how: "Missed probes. Suspect, then dead.",
     pkg: "internal/membership",
     demo: (
       <div className="ln-mini-seg">
@@ -81,7 +81,7 @@ const CARDS = [
   {
     need: "Partial partitions",
     Icon: IconUnlink,
-    how: "Sloppy quorum. If a preferred node is down, the write goes to the next healthy node with a hint naming the owner.",
+    how: "Down owner? The next node holds a hint.",
     pkg: "internal/replica · internal/store",
     demo: (
       <div className="ln-mini-row">
@@ -100,7 +100,7 @@ const CARDS = [
   {
     need: "Corruption",
     Icon: IconZap,
-    how: "A SHA-256 is stored with every object and checked on every read and every scrub.",
+    how: "SHA-256 on every read and scrub.",
     pkg: "internal/store",
     demo: (
       <div className="ln-mini-sum">
@@ -117,7 +117,7 @@ const CARDS = [
   {
     need: "Replica inconsistency",
     Icon: IconSync,
-    how: "Read-repair. When versions or checksums disagree, the winner is pushed to the lagging replicas.",
+    how: "Disagreeing copies get the winner.",
     pkg: "internal/repair",
     demo: (
       <div className="ln-mini-row">
@@ -134,7 +134,7 @@ const CARDS = [
   {
     need: "Rebalancing",
     Icon: IconShuffle,
-    how: "On a ring change each node lists keys it should no longer hold or newly owns, then copies and deletes behind a rate limit.",
+    how: "Keys move when the ring changes.",
     pkg: "internal/repair",
     demo: (
       <div className="ln-mini-bucket">
@@ -148,7 +148,7 @@ const CARDS = [
   {
     need: "Integrity",
     Icon: IconShield,
-    how: "A scrubber goroutine walks the local index on a timer and recomputes every checksum.",
+    how: "A timer rehashes the local index.",
     pkg: "internal/repair",
     demo: (
       <div className="ln-mini-row">
@@ -169,7 +169,7 @@ const CARDS = [
   {
     need: "Metadata consistency",
     Icon: IconRadio,
-    how: "Membership and ring version travel by gossip with an incarnation number. A stale ring version is ignored.",
+    how: "Gossip carries the ring. Stale versions lose.",
     pkg: "internal/membership · internal/ring",
     demo: (
       <div className="ln-mini-row">
@@ -209,12 +209,9 @@ export default function Requirements() {
           <span className="ln-eyebrow-num">02</span> Requirement → technique
         </p>
         <h2 id="ln-design-title" className="ln-h2">
-          Ten ways storage goes wrong, and the plain answer to each.
+          How storage breaks.
         </h2>
-        <p className="ln-intro">
-          Straight from the table in PLAN.md. Where a simpler technique was enough, the simpler one won. The small
-          diagrams are worked examples, not readings from a cluster.
-        </p>
+        <p className="ln-intro">One answer for each. The diagrams are examples, not live data.</p>
       </header>
 
       <div className="ln-req-grid" ref={gridRef}>

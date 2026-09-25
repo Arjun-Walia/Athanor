@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { Icon } from "../icons.jsx";
 import { Card, CardHead } from "../components.jsx";
-import { ago } from "../format.js";
 
 function Slider({ name, value, min, max, onChange, help }) {
   return (
@@ -16,7 +15,7 @@ function Slider({ name, value, min, max, onChange, help }) {
   );
 }
 
-export default function Durability({ ov, actions, now }) {
+export default function Durability({ ov, actions }) {
   const current = ov.config.quorum;
   const ringSize = (ov.nodes ?? []).filter((n) => n.in_ring).length || 1;
   const maxN = Math.max(1, Math.min(7, ringSize));
@@ -38,12 +37,8 @@ export default function Durability({ ov, actions, now }) {
   return (
     <div className="ath-page ath-durability-page">
       <div className="ath-hero">
-        <h1 className="ath-headline">Durability policy</h1>
-        <p className="ath-lede">
-          One N / W / R for the whole cluster. A change is gossiped to every node, and the newest version wins. It is now v
-          {ov.config.version}
-          {ov.config.version ? `, set on ${ov.config.origin} ${ago(ov.config.updated_at, now)}` : " (the startup default)"}.
-        </p>
+        <h1 className="ath-headline">Durability</h1>
+        <p className="ath-lede">{ov.config.version ? `v${ov.config.version} · ${ov.config.origin}` : "Startup default"}</p>
       </div>
       <div className="ath-dur-layout">
         <Card className="ath-dur-controls">
@@ -81,7 +76,7 @@ export default function Durability({ ov, actions, now }) {
           </button>
         </Card>
         <Card className="ath-dur-explain">
-          <CardHead title="What that buys you" />
+          <CardHead title="Quorum" />
           <div className="ath-quorum-viz" aria-hidden="true">
             {Array.from({ length: n }, (_, i) => {
               const inW = i < w;
@@ -99,27 +94,26 @@ export default function Durability({ ov, actions, now }) {
               {overlap > 0 ? <Icon.Check size={16} /> : <Icon.Alert size={16} />}
               <span>
                 {overlap > 0
-                  ? `W + R = ${w + r} > N = ${n}: every read set shares at least ${overlap} node${overlap === 1 ? "" : "s"} with the last acked write, while no node fails.`
-                  : `W + R = ${w + r} ≤ N = ${n}: a read can miss the newest write until read-repair or anti-entropy catches up.`}
+                  ? `Reads overlap the last write by ${overlap}.`
+                  : "Reads can miss the newest write."}
               </span>
             </li>
             <li>
               <Icon.Upload size={16} />
               <span>
-                Writes keep succeeding with up to {n - w} owner{n - w === 1 ? "" : "s"} down, and more while fallback nodes accept hints
-                (sloppy quorum).
+                Writes survive {n - w} owner{n - w === 1 ? "" : "s"} down.
               </span>
             </li>
             <li>
               <Icon.Eye size={16} />
               <span>
-                Reads keep succeeding with up to {n - r} owner{n - r === 1 ? "" : "s"} down.
+                Reads survive {n - r} owner{n - r === 1 ? "" : "s"} down.
               </span>
             </li>
             <li>
               <Icon.Layers size={16} />
               <span>
-                Storage cost is {n}× the object size. Reed–Solomon RS(4,2) would tolerate two losses at 1.5×; that is not built.
+                {n}× on disk.
               </span>
             </li>
           </ul>

@@ -1,0 +1,13 @@
+{
+  "name": "athanor-desktop",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Frameless desktop shell for the Athanor dashboard",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron --no-sandbox ."
+  },
+  "devDependencies": {
+    "electron": "^37.2.0"
+  }
+}

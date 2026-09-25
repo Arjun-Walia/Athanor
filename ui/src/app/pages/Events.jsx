@@ -41,11 +41,7 @@ export default function Events({ events, nodes, initialKind }) {
   return (
     <div className="ath-page ath-events">
       <div className="ath-hero">
-        <h1 className="ath-headline">Everything that happened</h1>
-        <p className="ath-lede">
-          Every node keeps an append-only log in memory. This view merges the reachable ones. The same observation from several nodes
-          folds into one line.
-        </p>
+        <h1 className="ath-headline">Events</h1>
       </div>
       <Card className="ath-log-card">
         <div className="ath-log-tools">
