@@ -22,3 +22,7 @@ ui/dist/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Built UI copied in for go:embed (make ui-embed)
+internal/webui/dist/*
+!internal/webui/dist/.gitkeep
