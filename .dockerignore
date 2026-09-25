@@ -1,7 +1,9 @@
 .git
 .github
+.claude
 ui/node_modules
 ui/dist
+desktop
 data
 bin
 *.md

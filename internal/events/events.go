@@ -133,6 +133,24 @@ func (l *Log) Since(since uint64, limit int) []Event {
 	return out
 }
 
+// Stats describes how full the ring is, for the health endpoint.
+type Stats struct {
+	Total    uint64 `json:"total"`    // events emitted since the process started
+	Retained int    `json:"retained"` // events still in the ring
+	Capacity int    `json:"capacity"`
+}
+
+// Stats reports how many events were emitted and how many are still kept.
+func (l *Log) Stats() Stats {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	retained := l.next
+	if l.filled {
+		retained = len(l.buf)
+	}
+	return Stats{Total: l.seq, Retained: retained, Capacity: len(l.buf)}
+}
+
 // Last returns the most recent event of kind, if any.
 func (l *Log) Last(kind Kind) (Event, bool) {
 	events := l.Since(0, 0)

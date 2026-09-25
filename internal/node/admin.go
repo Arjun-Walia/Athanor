@@ -27,6 +27,8 @@ type NodeView struct {
 	Bytes     uint64 `json:"bytes"`
 	Hints     int    `json:"hints"`
 	Tampered  int    `json:"tampered"`
+	// IndexErrors is how many of the node's index records no longer decode.
+	IndexErrors int `json:"index_errors"`
 }
 
 // ReplicaView is one node's copy of one object.
@@ -73,6 +75,7 @@ type Metrics struct {
 type Overview struct {
 	Coordinator string                  `json:"coordinator"`
 	Running     bool                    `json:"running"`
+	Ready       bool                    `json:"ready"`
 	RingVersion uint64                  `json:"ring_version"`
 	RingDigest  string                  `json:"ring_digest"`
 	Converged   bool                    `json:"converged"`
@@ -91,27 +94,43 @@ type Overview struct {
 type Health struct {
 	NodeID      string             `json:"node_id"`
 	State       string             `json:"state"` // running or stopped
+	Ready       bool               `json:"ready"`
+	ReadyReason string             `json:"ready_reason"`
 	Quorum      replica.Quorum     `json:"quorum"`
 	RingVersion uint64             `json:"ring_version"`
+	RingSize    int                `json:"ring_size"`
+	LiveMembers int                `json:"live_members"`
+	Restarts    int                `json:"restarts"`
 	BootedAt    time.Time          `json:"booted_at"`
 	StartedAt   time.Time          `json:"started_at"`
 	Scrub       repair.ScrubStatus `json:"scrub"`
 	Store       store.Stats        `json:"store"`
+	Events      events.Stats       `json:"events"`
 }
 
 // Health reports this process's state. It answers even when stopped.
 func (n *Node) Health() Health {
 	st, _ := n.store.Stats()
 	n.lifeMu.Lock()
-	running, started := n.running, n.startedAt
+	running, started, restarts := n.running, n.startedAt, n.restarts
 	n.lifeMu.Unlock()
 	state := "running"
 	if !running {
 		state = "stopped"
 	}
+	ready, why := n.Ready()
+	live := 0
+	r := n.ring.Load()
+	for _, id := range r.Nodes() {
+		if n.Reachable(id) {
+			live++
+		}
+	}
 	return Health{
-		NodeID: n.cfg.ID, State: state, Quorum: n.Quorum(), RingVersion: n.ring.Load().Version(),
+		NodeID: n.cfg.ID, State: state, Ready: ready, ReadyReason: why, Quorum: n.Quorum(),
+		RingVersion: r.Version(), RingSize: r.Size(), LiveMembers: live, Restarts: restarts,
 		BootedAt: n.bootedAt, StartedAt: started, Scrub: n.scrubber.Status(), Store: st,
+		Events: n.log.Stats(),
 	}
 }
 
@@ -151,9 +170,11 @@ func (n *Node) Overview(ctx context.Context, includeDeleted bool) (Overview, err
 	cfg := n.ClusterConfig()
 	invs := n.inventories(ctx)
 
+	ready, _ := n.Ready()
 	ov := Overview{
 		Coordinator: n.cfg.ID,
 		Running:     true,
+		Ready:       ready,
 		RingVersion: r.Version(),
 		RingDigest:  r.Digest(),
 		Config:      cfg,
@@ -172,6 +193,7 @@ func (n *Node) Overview(ctx context.Context, includeDeleted bool) (Overview, err
 			nv.Bytes = inv.Bytes
 			nv.Hints = len(inv.Hints)
 			nv.Tampered = len(inv.Tampered)
+			nv.IndexErrors = inv.IndexErrors
 			for _, o := range inv.Objects {
 				if !o.Deleted {
 					nv.Objects++
@@ -371,10 +393,12 @@ func (n *Node) ClusterEvents(ctx context.Context, limit int) []events.Event {
 
 // ScrubResult is one node's manual scrub pass.
 type ScrubResult struct {
-	Node       string `json:"node"`
-	Checked    uint64 `json:"checked"`
-	Mismatches uint64 `json:"mismatches"`
-	Error      string `json:"error,omitempty"`
+	Node         string `json:"node"`
+	Checked      uint64 `json:"checked"`
+	Mismatches   uint64 `json:"mismatches"`
+	HintsChecked uint64 `json:"hints_checked"`
+	HintsDropped uint64 `json:"hints_dropped"`
+	Error        string `json:"error,omitempty"`
 }
 
 // ScrubAll runs a scrub pass on every reachable member now.
@@ -393,20 +417,19 @@ func (n *Node) ScrubAll(ctx context.Context) ([]ScrubResult, error) {
 		go func(id string) {
 			defer wg.Done()
 			res := ScrubResult{Node: id}
+			var pass repair.ScrubResult
+			var err error
 			if id == n.cfg.ID {
-				c, m, err := n.scrubber.ScrubOnce(ctx, true)
-				res.Checked, res.Mismatches = uint64(c), uint64(m)
-				if err != nil {
-					res.Error = err.Error()
-				}
+				pass, err = n.scrubber.ScrubPass(ctx, true)
 			} else {
 				rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-				c, m, err := (&remotePeer{n: n, id: id}).scrub(rctx)
+				pass, err = (&remotePeer{n: n, id: id}).scrub(rctx)
 				cancel()
-				res.Checked, res.Mismatches = c, m
-				if err != nil {
-					res.Error = err.Error()
-				}
+			}
+			res.Checked, res.Mismatches = uint64(pass.Checked), uint64(pass.Mismatches)
+			res.HintsChecked, res.HintsDropped = uint64(pass.HintsChecked), uint64(pass.HintsDropped)
+			if err != nil {
+				res.Error = err.Error()
 			}
 			mu.Lock()
 			out = append(out, res)

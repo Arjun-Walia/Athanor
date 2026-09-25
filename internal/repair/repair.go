@@ -38,15 +38,16 @@ var ErrNoHealthyReplica = errors.New("no healthy replica reachable")
 
 // Report is one repair outcome.
 type Report struct {
-	Key     string
-	Reason  Reason
-	Winner  store.ObjectMeta
-	Source  string
-	Pushed  []string
-	Corrupt []string
-	Stale   []string
-	Missing []string
-	Took    time.Duration
+	Key      string
+	Reason   Reason
+	Winner   store.ObjectMeta
+	Source   string
+	Pushed   []string
+	Corrupt  []string
+	Stale    []string
+	Missing  []string
+	Surveyed int // members that answered the survey
+	Took     time.Duration
 }
 
 // Healed reports whether the repair changed any replica.
@@ -144,6 +145,7 @@ func (r *Repairer) repair(ctx context.Context, key string, reason Reason) (Repor
 	// Ask every reachable ring member. The cluster is small, and this finds
 	// hint holders and copies stranded by a ring change as well as owners.
 	replies := r.survey(ctx, key)
+	report.Surveyed = len(replies)
 
 	var winner replica.Replica
 	found := false
@@ -212,11 +214,12 @@ func (r *Repairer) repair(ctx context.Context, key string, reason Reason) (Repor
 	if report.Healed() {
 		r.log.Emit(events.KindRepair, events.LevelOK, key, describe(report),
 			map[string]string{
-				"reason":  string(reason),
-				"source":  source,
-				"pushed":  strings.Join(report.Pushed, ","),
-				"micros":  fmt.Sprint(report.Took.Microseconds()),
-				"version": fmt.Sprint(winner.Meta.Version),
+				"reason":   string(reason),
+				"source":   source,
+				"pushed":   strings.Join(report.Pushed, ","),
+				"micros":   fmt.Sprint(report.Took.Microseconds()),
+				"version":  fmt.Sprint(winner.Meta.Version),
+				"surveyed": fmt.Sprint(report.Surveyed),
 			})
 	}
 	return report, nil

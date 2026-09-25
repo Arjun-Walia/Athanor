@@ -3,7 +3,12 @@ package store
 import (
 	"bytes"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
+
+	bolt "go.etcd.io/bbolt"
 )
 
 func open(t *testing.T) *Disk {
@@ -210,5 +215,128 @@ func TestReopenKeepsIndex(t *testing.T) {
 	obj, err := d.Get("k")
 	if err != nil || !bytes.Equal(obj.Body, body) {
 		t.Fatalf("after reopen = %+v, %v", obj, err)
+	}
+}
+
+func TestSweepRemovesOrphansAndKeepsLiveFiles(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte("keep me")
+	meta := metaFor("k", 1, "node1", body)
+	if _, err := d.Put(meta, body); err != nil {
+		t.Fatal(err)
+	}
+	live := d.blobPath(meta)
+	old := time.Now().Add(-time.Minute)
+
+	// A temp file from a crash mid-write and a superseded payload nobody
+	// references any more. Both are older than the sweep's grace window.
+	orphanTmp := filepath.Join(filepath.Dir(live), ".incoming-crash")
+	orphanOld := filepath.Join(filepath.Dir(live), "deadbeef.1")
+	for _, p := range []string{orphanTmp, orphanOld} {
+		if err := os.WriteFile(p, []byte("junk"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(p, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = d.Close()
+
+	d, err = Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	for _, p := range []string{orphanTmp, orphanOld} {
+		if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("orphan %s survived the sweep", p)
+		}
+	}
+	if _, err := os.Stat(live); err != nil {
+		t.Fatalf("live payload removed: %v", err)
+	}
+	stats, _ := d.Stats()
+	if stats.Swept != 2 {
+		t.Fatalf("swept = %d, want 2", stats.Swept)
+	}
+	obj, err := d.Get("k")
+	if err != nil || obj.Corrupt || !bytes.Equal(obj.Body, body) {
+		t.Fatalf("after sweep = %+v, %v", obj, err)
+	}
+}
+
+func TestListSkipsDamagedIndexRecord(t *testing.T) {
+	d := open(t)
+	body := []byte("fine")
+	if _, err := d.Put(metaFor("good", 1, "node1", body), body); err != nil {
+		t.Fatal(err)
+	}
+	err := d.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket(bucketObjects).Put([]byte("broken"), []byte("{not json"))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := d.List()
+	if err != nil {
+		t.Fatalf("list with a damaged record failed: %v", err)
+	}
+	if len(list) != 1 || list[0].Key != "good" {
+		t.Fatalf("list = %+v", list)
+	}
+	stats, _ := d.Stats()
+	if stats.IndexErrors != 1 {
+		t.Fatalf("index errors = %d, want 1", stats.IndexErrors)
+	}
+}
+
+func TestMetaRoundTripAndMaxVersion(t *testing.T) {
+	d := open(t)
+	if _, ok, _ := d.GetMeta("policy"); ok {
+		t.Fatal("meta present before any write")
+	}
+	if err := d.PutMeta("policy", []byte(`{"n":3}`)); err != nil {
+		t.Fatal(err)
+	}
+	raw, ok, err := d.GetMeta("policy")
+	if err != nil || !ok || string(raw) != `{"n":3}` {
+		t.Fatalf("meta = %q %v %v", raw, ok, err)
+	}
+	body := []byte("x")
+	if _, err := d.Put(metaFor("a", 40, "node1", body), body); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.PutHint("node2", metaFor("b", 900, "node1", body), body); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := d.MaxVersion(); err != nil || v != 900 {
+		t.Fatalf("max version = %d, %v", v, err)
+	}
+}
+
+func TestVerifyHintsDropsCorruptOnes(t *testing.T) {
+	d := open(t)
+	body := []byte("parked bytes")
+	meta := metaFor("k", 3, "node1", body)
+	if _, err := d.PutHint("node2", meta, body); err != nil {
+		t.Fatal(err)
+	}
+	checked, dropped, err := d.VerifyHints()
+	if err != nil || checked != 1 || dropped != 0 {
+		t.Fatalf("healthy hint: %d %d %v", checked, dropped, err)
+	}
+	if err := os.WriteFile(d.hintPath("node2", meta), []byte("parked byteZ"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	checked, dropped, err = d.VerifyHints()
+	if err != nil || checked != 1 || dropped != 1 {
+		t.Fatalf("corrupt hint: %d %d %v", checked, dropped, err)
+	}
+	if hints, _ := d.ListHints(); len(hints) != 0 {
+		t.Fatalf("corrupt hint kept: %+v", hints)
 	}
 }

@@ -1,10 +1,13 @@
 // Package replicatest is an in-process cluster for coordinator and repair
 // tests: real stores on temp dirs, a real ring, and switchable reachability.
+// There is no network in it, so a test can turn a node off and on in one
+// line and never waits for a failure detector.
 package replicatest
 
 import (
 	"context"
 	"errors"
+	"sort"
 	"sync"
 	"testing"
 
@@ -48,6 +51,20 @@ func (c *Cluster) SetDown(node string, down bool) {
 	c.mu.Lock()
 	c.down[node] = down
 	c.mu.Unlock()
+}
+
+// Down lists the nodes currently marked unreachable, sorted.
+func (c *Cluster) Down() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []string
+	for n, d := range c.down {
+		if d {
+			out = append(out, n)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (c *Cluster) isDown(node string) bool {

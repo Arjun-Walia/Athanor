@@ -11,6 +11,7 @@ import (
 	"github.com/Arjun-Walia/Athanor/internal/events"
 	"github.com/Arjun-Walia/Athanor/internal/replica"
 	"github.com/Arjun-Walia/Athanor/internal/replica/replicatest"
+	"github.com/Arjun-Walia/Athanor/internal/store"
 )
 
 var names = []string{"node1", "node2", "node3", "node4", "node5"}
@@ -179,5 +180,74 @@ func TestClockIsMonotonic(t *testing.T) {
 			t.Fatalf("clock went backwards: %d after %d", v, prev)
 		}
 		prev = v
+	}
+}
+
+// flakyView fails the first Replicate and the first GetReplica on every
+// peer, then behaves. It models a connection that was half-open when a
+// peer restarted: the first call errors, the redial succeeds.
+type flakyView struct {
+	replica.View
+	mu     sync.Mutex
+	failed map[string]bool
+}
+
+type flakyPeer struct {
+	replica.Peer
+	v *flakyView
+}
+
+var errFlaky = errors.New("transient")
+
+func (v *flakyView) Peer(node string) replica.Peer {
+	return &flakyPeer{Peer: v.View.Peer(node), v: v}
+}
+
+// trip reports whether this is the first call of op on this peer.
+func (p *flakyPeer) trip(op string) bool {
+	p.v.mu.Lock()
+	defer p.v.mu.Unlock()
+	k := p.ID() + ":" + op
+	if p.v.failed[k] {
+		return false
+	}
+	p.v.failed[k] = true
+	return true
+}
+
+func (p *flakyPeer) Replicate(ctx context.Context, m store.ObjectMeta, b []byte, r string) (store.PutResult, error) {
+	if p.trip("replicate") {
+		return store.PutResult{}, errFlaky
+	}
+	return p.Peer.Replicate(ctx, m, b, r)
+}
+
+func (p *flakyPeer) GetReplica(ctx context.Context, key string, withBody bool) (replica.Replica, error) {
+	if p.trip("get") {
+		return replica.Replica{}, errFlaky
+	}
+	return p.Peer.GetReplica(ctx, key, withBody)
+}
+
+func TestWriteRetriesATransientReplicaFailure(t *testing.T) {
+	c := replicatest.New(t, names)
+	fv := &flakyView{View: c.View("node1"), failed: map[string]bool{}}
+	co := replica.NewCoordinator(fv, &replica.Clock{}, events.New("node1", 100, true), time.Second)
+	co.Retry = 20 * time.Millisecond
+	res, err := co.Put(context.Background(), "k", []byte("once more"), "")
+	if err != nil {
+		t.Fatalf("write with a transient failure on every replica: %v", err)
+	}
+	for _, a := range res.Acks {
+		if a.HintFor != "" {
+			t.Fatalf("a retried write should not fall back to a hint: %+v", res.Acks)
+		}
+	}
+	got, err := co.Get(context.Background(), "k")
+	if err != nil || string(got.Body) != "once more" {
+		t.Fatalf("read back = %q, %v", got.Body, err)
+	}
+	if got.Degraded {
+		t.Fatal("a read that succeeded on retry should not be degraded")
 	}
 }

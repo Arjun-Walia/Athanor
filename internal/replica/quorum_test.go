@@ -12,6 +12,22 @@ func TestDefaultQuorum(t *testing.T) {
 	}
 }
 
+func TestQuorumOverlapAndTolerance(t *testing.T) {
+	q := DefaultQuorum()
+	if !q.Overlapping() {
+		t.Fatal("3/2/2 must overlap")
+	}
+	if (Quorum{N: 3, W: 1, R: 1}).Overlapping() {
+		t.Fatal("3/1/1 must not overlap")
+	}
+	if q.WriteTolerance() != 1 || q.ReadTolerance() != 1 {
+		t.Fatalf("tolerance = %d/%d, want 1/1", q.WriteTolerance(), q.ReadTolerance())
+	}
+	if err := (Quorum{N: MaxN + 1, W: 1, R: 1}).Validate(); err == nil {
+		t.Fatal("N above MaxN accepted")
+	}
+}
+
 func TestQuorumValid(t *testing.T) {
 	tests := []struct {
 		name  string

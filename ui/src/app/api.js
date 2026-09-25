@@ -1,9 +1,27 @@
 // Thin client for one node's HTTP API. Any node can coordinate any call.
+//
+// The dashboard may be served by a node (production), by Vite (development),
+// or by the desktop shell (no origin at all). Which node to talk to is
+// decided in useCluster.js; this file only knows how to talk to one.
 
 export const DEFAULT_BASE = "http://localhost:8081";
 
+// The public cluster. The desktop app and a dev build fall back to it when
+// no local node answers, so an installed app works out of the box.
+export const PUBLIC_BASE = "https://www.athanor.cfd";
+
 export function trimBase(base) {
-  return base.replace(/\/+$/, "");
+  return String(base || "").replace(/\/+$/, "");
+}
+
+/** True for localhost, 127.0.0.1, [::1] and *.localhost origins. */
+export function isLoopback(url) {
+  try {
+    const { hostname } = new URL(url);
+    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "::1" || hostname.endsWith(".localhost");
+  } catch {
+    return false;
+  }
 }
 
 // Keys may contain slashes; encode each segment, keep the separators.
@@ -52,6 +70,7 @@ const json = (value) => ({ body: JSON.stringify(value), headers: { "Content-Type
 
 export const api = {
   health: (base, signal) => request(base, "/v1/admin/health", { signal, timeout: 2500 }),
+  ready: (base, signal) => request(base, "/v1/admin/ready", { signal, timeout: 2500 }),
   overview: (base, signal) => request(base, "/v1/admin/overview", { signal }),
   events: (base, signal) => request(base, "/v1/admin/events?limit=400", { signal }),
   ring: (base, key, signal) =>
@@ -83,6 +102,7 @@ export const api = {
       version: h("X-Athanor-Version"),
       checksum: h("X-Athanor-Checksum"),
       coordinator: h("X-Athanor-Coordinator"),
+      answeredBy: h("X-Athanor-Node"),
       degraded: h("X-Athanor-Degraded") === "true",
       replicas: h("X-Athanor-Replicas")
         .split(",")

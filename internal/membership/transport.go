@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hashicorp/memberlist"
@@ -21,7 +22,14 @@ type filterTransport struct {
 	streams  chan net.Conn
 	shutdown chan struct{}
 	once     sync.Once
+
+	// dropped counts packets and dials refused because of a partition, so
+	// a test or an operator can see the cut doing its work.
+	dropped atomic.Uint64
 }
+
+// Dropped is how many gossip packets and dials this side has refused.
+func (t *filterTransport) Dropped() uint64 { return t.dropped.Load() }
 
 var errPartitioned = errors.New("membership: peer is partitioned away")
 
@@ -44,7 +52,11 @@ func (t *filterTransport) pumpPackets() {
 		case <-t.shutdown:
 			return
 		case p := <-t.inner.PacketCh():
-			if p == nil || t.blocked("", p.From.String()) {
+			if p == nil {
+				continue
+			}
+			if t.blocked("", p.From.String()) {
+				t.dropped.Add(1)
 				continue
 			}
 			select {
@@ -81,6 +93,7 @@ func (t *filterTransport) FinalAdvertiseAddr(ip string, port int) (net.IP, int, 
 
 func (t *filterTransport) WriteTo(b []byte, addr string) (time.Time, error) {
 	if t.blocked("", addr) {
+		t.dropped.Add(1)
 		return time.Now(), nil // dropped on the floor, like a lost datagram
 	}
 	return t.inner.WriteTo(b, addr)
@@ -88,6 +101,7 @@ func (t *filterTransport) WriteTo(b []byte, addr string) (time.Time, error) {
 
 func (t *filterTransport) WriteToAddress(b []byte, a memberlist.Address) (time.Time, error) {
 	if t.blocked(a.Name, a.Addr) {
+		t.dropped.Add(1)
 		return time.Now(), nil
 	}
 	return t.inner.WriteTo(b, a.Addr)
@@ -97,6 +111,7 @@ func (t *filterTransport) PacketCh() <-chan *memberlist.Packet { return t.packet
 
 func (t *filterTransport) DialTimeout(addr string, timeout time.Duration) (net.Conn, error) {
 	if t.blocked("", addr) {
+		t.dropped.Add(1)
 		return nil, errPartitioned
 	}
 	return t.inner.DialTimeout(addr, timeout)
@@ -104,6 +119,7 @@ func (t *filterTransport) DialTimeout(addr string, timeout time.Duration) (net.C
 
 func (t *filterTransport) DialAddressTimeout(a memberlist.Address, timeout time.Duration) (net.Conn, error) {
 	if t.blocked(a.Name, a.Addr) {
+		t.dropped.Add(1)
 		return nil, errPartitioned
 	}
 	return t.inner.DialTimeout(a.Addr, timeout)

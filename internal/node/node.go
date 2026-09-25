@@ -6,10 +6,16 @@
 // gossip, peer RPC, and background jobs, which is what peers would see if the
 // process crashed. The HTTP admin API stays up so the dashboard can start the
 // node again. The store stays on disk, so a restart finds its data.
+//
+// Two small records ride along in the store so a process restart is not a
+// step backwards: the gossiped N/W/R policy (a restarted cluster keeps the
+// policy an operator set) and the clock high-water mark (a restarted node
+// never issues a version older than one it already handed out).
 package node
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -128,8 +134,33 @@ func New(cfg Config) (*Node, error) {
 		bootedAt: time.Now().UTC(),
 	}
 	n.local = &replica.LocalPeer{Node: cfg.ID, Store: st, Clock: n.clock}
-	n.cluster.Store(&ClusterConfig{Quorum: cfg.Quorum, Version: 0, Origin: cfg.ID})
 	n.ring.Store(ring.New([]string{cfg.ID}, cfg.VNodes, 0))
+
+	// Restore what the last run knew. The persisted policy wins over the
+	// flags when it exists: it was set on purpose, by an operator, and a
+	// restart must not silently reset the cluster to its defaults.
+	policy := ClusterConfig{Quorum: cfg.Quorum, Version: 0, Origin: cfg.ID}
+	if raw, ok, _ := st.GetMeta(metaPolicy); ok {
+		var saved ClusterConfig
+		if err := json.Unmarshal(raw, &saved); err == nil && saved.Quorum.Validate() == nil {
+			policy = saved
+		}
+	}
+	n.cluster.Store(&policy)
+	if v, err := st.MaxVersion(); err == nil {
+		n.clock.Observe(v)
+	}
+	if raw, ok, _ := st.GetMeta(metaClock); ok && len(raw) == 8 {
+		n.clock.Observe(binary.BigEndian.Uint64(raw))
+	}
+	if stats, err := st.Stats(); err == nil {
+		if stats.Swept > 0 {
+			n.log.Emitf(events.KindMembership, events.LevelInfo, "", "%s recovery sweep removed %d orphan file(s) left by an earlier crash", cfg.ID, stats.Swept)
+		}
+		if stats.IndexErrors > 0 {
+			n.log.Emitf(events.KindMembership, events.LevelWarn, "", "%s index has %d record(s) that no longer decode; they are skipped", cfg.ID, stats.IndexErrors)
+		}
+	}
 
 	_, grpcPort, err := splitPort(cfg.GRPCAddr)
 	if err != nil {
@@ -232,6 +263,7 @@ func (n *Node) Stop() {
 	n.mem.Stop()
 	n.grpcSrv.Stop()
 	n.wg.Wait()
+	n.saveClock()
 	n.log.Emitf(events.KindFault, events.LevelErr, "", "%s stopped: gossip and peer RPC are off, data stays on disk", n.cfg.ID)
 }
 
@@ -252,6 +284,54 @@ func (n *Node) Running() bool {
 	n.lifeMu.Lock()
 	defer n.lifeMu.Unlock()
 	return n.running
+}
+
+// Ready reports whether this node can take client traffic with a fair
+// chance of success: it is running and its view of the ring holds enough
+// live members for a write to reach W. A load balancer or orchestrator
+// should route on this, and on Health for liveness.
+func (n *Node) Ready() (bool, string) {
+	if !n.Running() {
+		return false, "stopped"
+	}
+	q := n.Quorum()
+	live := 0
+	for _, id := range n.Members() {
+		if n.Reachable(id) {
+			live++
+		}
+	}
+	switch {
+	case live < q.W:
+		return false, fmt.Sprintf("%d live member(s), W=%d", live, q.W)
+	case q.N > 1 && n.mem.Isolated():
+		return false, "no live peer yet"
+	}
+	return true, "ok"
+}
+
+// Restarts is how many times Start ran in this process.
+func (n *Node) Restarts() int {
+	n.lifeMu.Lock()
+	defer n.lifeMu.Unlock()
+	return n.restarts
+}
+
+const (
+	metaPolicy = "cluster-policy"
+	metaClock  = "clock"
+)
+
+func (n *Node) saveClock() {
+	var raw [8]byte
+	binary.BigEndian.PutUint64(raw[:], n.clock.Last())
+	_ = n.store.PutMeta(metaClock, raw[:])
+}
+
+func (n *Node) savePolicy(cfg ClusterConfig) {
+	if raw, err := json.Marshal(cfg); err == nil {
+		_ = n.store.PutMeta(metaPolicy, raw)
+	}
 }
 
 // ID is this node's id.
@@ -342,6 +422,7 @@ func (n *Node) mergeState(raw []byte) {
 }
 
 func (n *Node) afterConfigChange(prev, next ClusterConfig) {
+	n.savePolicy(next)
 	if prev.Quorum == next.Quorum {
 		return
 	}

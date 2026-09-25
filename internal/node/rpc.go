@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
@@ -25,21 +26,65 @@ const maxMessage = 96 << 20
 
 const fromHeader = "athanor-from"
 
+// Keepalive settings. A peer that vanishes without closing its sockets (a
+// pulled cable, a frozen VM) would otherwise leave a half-open connection
+// that every call has to time out on. Pings every 10s with a 3s answer
+// window mean such a peer is noticed inside one probe interval of SWIM's
+// own verdict, and the gRPC client backs off and redials.
+var (
+	serverKeepalive = keepalive.ServerParameters{
+		Time:    10 * time.Second,
+		Timeout: 3 * time.Second,
+	}
+	serverKeepalivePolicy = keepalive.EnforcementPolicy{
+		MinTime:             5 * time.Second,
+		PermitWithoutStream: true,
+	}
+	clientKeepalive = keepalive.ClientParameters{
+		Time:                10 * time.Second,
+		Timeout:             3 * time.Second,
+		PermitWithoutStream: true,
+	}
+)
+
 func newGRPCServer(n *Node) *grpc.Server {
 	srv := grpc.NewServer(
 		grpc.MaxRecvMsgSize(maxMessage),
 		grpc.MaxSendMsgSize(maxMessage),
-		grpc.UnaryInterceptor(func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-			if md, ok := metadata.FromIncomingContext(ctx); ok {
-				if from := md.Get(fromHeader); len(from) > 0 && n.partitionedFrom(from[0]) {
-					return nil, status.Error(codes.Unavailable, "partitioned")
-				}
-			}
-			return handler(ctx, req)
-		}),
+		grpc.KeepaliveParams(serverKeepalive),
+		grpc.KeepaliveEnforcementPolicy(serverKeepalivePolicy),
+		grpc.ChainUnaryInterceptor(recoverInterceptor(n), partitionInterceptor(n)),
 	)
 	nodepb.RegisterNodeServer(srv, &rpcServer{n: n})
 	return srv
+}
+
+// recoverInterceptor turns a panic in one RPC into an Internal error for
+// that caller. Without it a single bad request would take the whole node
+// process down, and the node would then need a human to bring it back.
+func recoverInterceptor(n *Node) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp any, err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				n.log.Emitf(events.KindFault, events.LevelErr, "", "%s recovered from a panic in %s: %v", n.cfg.ID, info.FullMethod, r)
+				err = status.Errorf(codes.Internal, "panic in %s: %v", info.FullMethod, r)
+			}
+		}()
+		return handler(ctx, req)
+	}
+}
+
+// partitionInterceptor refuses calls from a peer this node is simulating a
+// network cut with.
+func partitionInterceptor(n *Node) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		if md, ok := metadata.FromIncomingContext(ctx); ok {
+			if from := md.Get(fromHeader); len(from) > 0 && n.partitionedFrom(from[0]) {
+				return nil, status.Error(codes.Unavailable, "partitioned")
+			}
+		}
+		return handler(ctx, req)
+	}
 }
 
 // rpcServer answers peers. Every data call goes through the same LocalPeer
@@ -118,7 +163,7 @@ func (s *rpcServer) ListReplicas(ctx context.Context, _ *nodepb.ListReplicasRequ
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	out := &nodepb.ListReplicasResponse{Tampered: inv.Tampered, Bytes: inv.Bytes}
+	out := &nodepb.ListReplicasResponse{Tampered: inv.Tampered, Bytes: inv.Bytes, IndexErrors: uint64(inv.IndexErrors)}
 	for _, m := range inv.Objects {
 		out.Objects = append(out.Objects, metaToPB(m))
 	}
@@ -150,11 +195,14 @@ func (s *rpcServer) Corrupt(_ context.Context, req *nodepb.CorruptRequest) (*nod
 }
 
 func (s *rpcServer) Scrub(ctx context.Context, _ *nodepb.ScrubRequest) (*nodepb.ScrubResponse, error) {
-	checked, mismatches, err := s.n.scrubber.ScrubOnce(ctx, true)
+	res, err := s.n.scrubber.ScrubPass(ctx, true)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	return &nodepb.ScrubResponse{Checked: uint64(checked), Mismatches: uint64(mismatches)}, nil
+	return &nodepb.ScrubResponse{
+		Checked: uint64(res.Checked), Mismatches: uint64(res.Mismatches),
+		HintsChecked: uint64(res.HintsChecked), HintsDropped: uint64(res.HintsDropped),
+	}, nil
 }
 
 func (n *Node) corruptLocal(key string) error {
@@ -176,6 +224,7 @@ func (n *Node) conn(addr string) (*grpc.ClientConn, error) {
 	}
 	c, err := grpc.NewClient(addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithKeepaliveParams(clientKeepalive),
 		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(maxMessage), grpc.MaxCallSendMsgSize(maxMessage)),
 		grpc.WithConnectParams(grpc.ConnectParams{
 			Backoff:           backoff.Config{BaseDelay: 100 * time.Millisecond, Multiplier: 1.6, Jitter: 0.2, MaxDelay: 2 * time.Second},
@@ -272,7 +321,7 @@ func (p *remotePeer) Inventory(ctx context.Context) (replica.Inventory, error) {
 	if err != nil {
 		return replica.Inventory{}, err
 	}
-	inv := replica.Inventory{Node: p.id, Tampered: res.GetTampered(), Bytes: res.GetBytes()}
+	inv := replica.Inventory{Node: p.id, Tampered: res.GetTampered(), Bytes: res.GetBytes(), IndexErrors: int(res.GetIndexErrors())}
 	for _, m := range res.GetObjects() {
 		meta, err := metaFromPB(m)
 		if err != nil {
@@ -319,16 +368,19 @@ func (p *remotePeer) corrupt(ctx context.Context, key string) error {
 	return err
 }
 
-func (p *remotePeer) scrub(ctx context.Context) (uint64, uint64, error) {
+func (p *remotePeer) scrub(ctx context.Context) (repair.ScrubResult, error) {
 	c, err := p.client()
 	if err != nil {
-		return 0, 0, err
+		return repair.ScrubResult{}, err
 	}
 	res, err := c.Scrub(ctx, &nodepb.ScrubRequest{})
 	if err != nil {
-		return 0, 0, err
+		return repair.ScrubResult{}, err
 	}
-	return res.GetChecked(), res.GetMismatches(), nil
+	return repair.ScrubResult{
+		Checked: int(res.GetChecked()), Mismatches: int(res.GetMismatches()),
+		HintsChecked: int(res.GetHintsChecked()), HintsDropped: int(res.GetHintsDropped()),
+	}, nil
 }
 
 func metaToPB(m store.ObjectMeta) *nodepb.ObjectMeta {

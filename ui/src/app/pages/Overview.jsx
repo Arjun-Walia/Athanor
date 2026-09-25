@@ -112,6 +112,10 @@ function CoordinatorCard({ ov, self }) {
           {ov.converged ? <Icon.Check size={13} /> : <Icon.Alert size={13} />}
           {ov.converged ? "ring agreed" : "ring converging"}
         </span>
+        <span className={`chip ${ov.ready ? "" : "red"}`} title="Can a write from this node reach W right now?">
+          {ov.ready ? <Icon.Check size={13} /> : <Icon.X size={13} />}
+          {ov.ready ? "ready" : "not ready"}
+        </span>
       </div>
       <div className="ath-coord-foot">
         <div>
@@ -174,6 +178,12 @@ function ScrubCard({ ov, now, onScrub, busy, go }) {
               Last pass {ago(last, now)}
               <br />
               <span className="num">{s.checked}</span> verified · <span className="num">{s.mismatches}</span> bad
+              {s.hints_checked ? (
+                <>
+                  {" · "}
+                  <span className="num">{s.hints_checked}</span> hint{s.hints_checked === 1 ? "" : "s"}
+                </>
+              ) : null}
             </>
           ) : (
             <>

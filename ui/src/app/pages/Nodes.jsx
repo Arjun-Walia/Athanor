@@ -149,6 +149,16 @@ function NodeCard({ n, all, ov, actions, now }) {
             <Icon.Zap size={13} /> {n.tampered} flipped
           </span>
         ) : null}
+        {n.counted && n.index_errors ? (
+          <span className="chip red" title="Index records that no longer decode; they are skipped">
+            <Icon.ShieldAlert size={13} /> {n.index_errors} bad index record{n.index_errors === 1 ? "" : "s"}
+          </span>
+        ) : null}
+        {!n.self && n.status !== "dead" && n.status !== "stopped" && !n.reachable ? (
+          <span className="chip outline" title="Alive by gossip, but this coordinator cannot reach it">
+            <Icon.Scissors size={13} /> unreachable from here
+          </span>
+        ) : null}
       </footer>
     </Card>
   );
@@ -180,7 +190,9 @@ export default function Nodes({ ov, ring, base, actions, now }) {
         <h1 className="ath-headline">Ring</h1>
         <p className="ath-lede">
           {ids.length === 1 ? "1 node" : `${ids.length} nodes`}
-          {ring ? ` · ${Math.round(ring.tokens.length / Math.max(1, ids.length))} vnodes` : ""}
+          {ring ? ` · ${Math.round(ring.tokens.length / Math.max(1, ids.length))} vnodes each` : ""}
+          {" · "}
+          {nodes.filter((n) => n.reachable).length} reachable from {ov.coordinator}
         </p>
       </div>
       <div className="ath-nodes-layout">

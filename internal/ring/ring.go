@@ -125,6 +125,20 @@ func (r *Ring) Preference(key string, n int) (PreferenceList, error) {
 // KeyHash is the ring position of key: the first 8 bytes of SHA-256.
 func KeyHash(key string) uint64 { return hash64(key) }
 
+// Position maps a ring hash to a fraction of one turn, 0 <= p < 1, which is
+// what the dashboard draws. The same key lands at the same angle on every
+// node and in the landing page's illustration.
+func Position(h uint64) float64 { return float64(h) / 18446744073709551616.0 }
+
+// Owners returns the preference list as plain ids, or nil on an empty ring.
+func (r *Ring) Owners(key string, n int) []string {
+	p, err := r.Preference(key, n)
+	if err != nil {
+		return nil
+	}
+	return p.Nodes
+}
+
 // Digest is a short, order-independent fingerprint of a member set.
 func Digest(nodes []string) string {
 	uniq := dedupe(nodes)

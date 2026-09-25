@@ -51,4 +51,11 @@ func (q Quorum) Validate() error {
 // when no node has failed.
 func (q Quorum) Overlapping() bool { return q.W+q.R > q.N }
 
+// WriteTolerance is how many owners can be down while a write still reaches
+// W without a hint; ReadTolerance is the same for reads and R.
+func (q Quorum) WriteTolerance() int { return q.N - q.W }
+
+// ReadTolerance is how many owners can be down while a read still reaches R.
+func (q Quorum) ReadTolerance() int { return q.N - q.R }
+
 func (q Quorum) String() string { return fmt.Sprintf("%d/%d/%d", q.N, q.W, q.R) }

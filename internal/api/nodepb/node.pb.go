@@ -6,6 +6,10 @@
 
 // Node-to-node RPC. Generated Go lives in internal/api/nodepb; regenerate
 // with `make proto` after editing this file.
+//
+// Every call is unary and bounded by the caller's deadline. Servers answer
+// Unavailable for a peer they are partitioned from, and a panic inside a
+// handler is turned into Internal for that one call.
 
 package nodepb
 
@@ -845,8 +849,10 @@ type ListReplicasResponse struct {
 	// Parked hints. hinted_for names the node each hint is waiting for.
 	Hints []*ObjectMeta `protobuf:"bytes,2,rep,name=hints,proto3" json:"hints,omitempty"`
 	// Keys whose bytes an operator flipped and no check has caught yet.
-	Tampered      []string `protobuf:"bytes,3,rep,name=tampered,proto3" json:"tampered,omitempty"`
-	Bytes         uint64   `protobuf:"varint,4,opt,name=bytes,proto3" json:"bytes,omitempty"`
+	Tampered []string `protobuf:"bytes,3,rep,name=tampered,proto3" json:"tampered,omitempty"`
+	Bytes    uint64   `protobuf:"varint,4,opt,name=bytes,proto3" json:"bytes,omitempty"`
+	// Index records on this node that no longer decode and are skipped.
+	IndexErrors   uint64 `protobuf:"varint,5,opt,name=index_errors,json=indexErrors,proto3" json:"index_errors,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -905,6 +911,13 @@ func (x *ListReplicasResponse) GetTampered() []string {
 func (x *ListReplicasResponse) GetBytes() uint64 {
 	if x != nil {
 		return x.Bytes
+	}
+	return 0
+}
+
+func (x *ListReplicasResponse) GetIndexErrors() uint64 {
+	if x != nil {
+		return x.IndexErrors
 	}
 	return 0
 }
@@ -1230,9 +1243,14 @@ func (*ScrubRequest) Descriptor() ([]byte, []int) {
 }
 
 type ScrubResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Checked       uint64                 `protobuf:"varint,1,opt,name=checked,proto3" json:"checked,omitempty"`
-	Mismatches    uint64                 `protobuf:"varint,2,opt,name=mismatches,proto3" json:"mismatches,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Checked    uint64                 `protobuf:"varint,1,opt,name=checked,proto3" json:"checked,omitempty"`
+	Mismatches uint64                 `protobuf:"varint,2,opt,name=mismatches,proto3" json:"mismatches,omitempty"`
+	// Parked hints re-hashed on this pass, and how many failed and were
+	// dropped. A corrupt hint is never replayed; the owner is repaired from
+	// the other replicas instead.
+	HintsChecked  uint64 `protobuf:"varint,3,opt,name=hints_checked,json=hintsChecked,proto3" json:"hints_checked,omitempty"`
+	HintsDropped  uint64 `protobuf:"varint,4,opt,name=hints_dropped,json=hintsDropped,proto3" json:"hints_dropped,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1277,6 +1295,20 @@ func (x *ScrubResponse) GetChecked() uint64 {
 func (x *ScrubResponse) GetMismatches() uint64 {
 	if x != nil {
 		return x.Mismatches
+	}
+	return 0
+}
+
+func (x *ScrubResponse) GetHintsChecked() uint64 {
+	if x != nil {
+		return x.HintsChecked
+	}
+	return 0
+}
+
+func (x *ScrubResponse) GetHintsDropped() uint64 {
+	if x != nil {
+		return x.HintsDropped
 	}
 	return 0
 }
@@ -1347,12 +1379,13 @@ const file_proto_node_proto_rawDesc = "" +
 	"\amembers\x18\x02 \x03(\v2\x12.athanor.v1.MemberR\amembers\x12\x1f\n" +
 	"\vring_digest\x18\x03 \x01(\tR\n" +
 	"ringDigest\"\x15\n" +
-	"\x13ListReplicasRequest\"\xa8\x01\n" +
+	"\x13ListReplicasRequest\"\xcb\x01\n" +
 	"\x14ListReplicasResponse\x120\n" +
 	"\aobjects\x18\x01 \x03(\v2\x16.athanor.v1.ObjectMetaR\aobjects\x12,\n" +
 	"\x05hints\x18\x02 \x03(\v2\x16.athanor.v1.ObjectMetaR\x05hints\x12\x1a\n" +
 	"\btampered\x18\x03 \x03(\tR\btampered\x12\x14\n" +
-	"\x05bytes\x18\x04 \x01(\x04R\x05bytes\";\n" +
+	"\x05bytes\x18\x04 \x01(\x04R\x05bytes\x12!\n" +
+	"\findex_errors\x18\x05 \x01(\x04R\vindexErrors\";\n" +
 	"\rEventsRequest\x12\x14\n" +
 	"\x05since\x18\x01 \x01(\x04R\x05since\x12\x14\n" +
 	"\x05limit\x18\x02 \x01(\rR\x05limit\"\x93\x02\n" +
@@ -1375,12 +1408,14 @@ const file_proto_node_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\"/\n" +
 	"\x0fCorruptResponse\x12\x1c\n" +
 	"\tcorrupted\x18\x01 \x01(\bR\tcorrupted\"\x0e\n" +
-	"\fScrubRequest\"I\n" +
+	"\fScrubRequest\"\x93\x01\n" +
 	"\rScrubResponse\x12\x18\n" +
 	"\achecked\x18\x01 \x01(\x04R\achecked\x12\x1e\n" +
 	"\n" +
 	"mismatches\x18\x02 \x01(\x04R\n" +
-	"mismatches2\x82\x05\n" +
+	"mismatches\x12#\n" +
+	"\rhints_checked\x18\x03 \x01(\x04R\fhintsChecked\x12#\n" +
+	"\rhints_dropped\x18\x04 \x01(\x04R\fhintsDropped2\x82\x05\n" +
 	"\x04Node\x12H\n" +
 	"\tReplicate\x12\x1c.athanor.v1.ReplicateRequest\x1a\x1d.athanor.v1.ReplicateResponse\x12K\n" +
 	"\n" +

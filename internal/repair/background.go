@@ -17,13 +17,24 @@ type RepairFunc func(ctx context.Context, key string, reason Reason) (Report, er
 
 // ScrubStatus is shown on the dashboard's scrub dial.
 type ScrubStatus struct {
-	Interval   time.Duration `json:"-"`
-	Every      float64       `json:"every_seconds"`
-	LastAt     time.Time     `json:"last_at"`
-	NextAt     time.Time     `json:"next_at"`
-	Checked    int           `json:"checked"`
-	Mismatches int           `json:"mismatches"`
-	Running    bool          `json:"running"`
+	Interval     time.Duration `json:"-"`
+	Every        float64       `json:"every_seconds"`
+	LastAt       time.Time     `json:"last_at"`
+	NextAt       time.Time     `json:"next_at"`
+	Checked      int           `json:"checked"`
+	Mismatches   int           `json:"mismatches"`
+	HintsChecked int           `json:"hints_checked"`
+	HintsDropped int           `json:"hints_dropped"`
+	Passes       uint64        `json:"passes"`
+	Running      bool          `json:"running"`
+}
+
+// ScrubResult is one pass: primary replicas and parked hints.
+type ScrubResult struct {
+	Checked      int
+	Mismatches   int
+	HintsChecked int
+	HintsDropped int
 }
 
 // Scrubber walks the local index, recomputes every checksum, and calls
@@ -75,6 +86,15 @@ func (s *Scrubber) Run(ctx context.Context) {
 // ScrubOnce checks every local replica once. manual passes always log a
 // summary; timed passes log only when they find something.
 func (s *Scrubber) ScrubOnce(ctx context.Context, manual bool) (checked, mismatches int, err error) {
+	res, err := s.ScrubPass(ctx, manual)
+	return res.Checked, res.Mismatches, err
+}
+
+// ScrubPass is ScrubOnce with the hint numbers too. Primary replicas that
+// fail their checksum are repaired from the other owners; parked hints that
+// fail theirs are dropped, since a hint is only a courtesy copy and the
+// owner will be rebuilt by Repair.
+func (s *Scrubber) ScrubPass(ctx context.Context, manual bool) (res ScrubResult, err error) {
 	s.run.Lock()
 	defer s.run.Unlock()
 	s.mu.Lock()
@@ -86,18 +106,21 @@ func (s *Scrubber) ScrubOnce(ctx context.Context, manual bool) (checked, mismatc
 		s.status.Running = false
 		s.status.LastAt = now
 		s.status.NextAt = now.Add(s.interval)
-		s.status.Checked = checked
-		s.status.Mismatches = mismatches
+		s.status.Checked = res.Checked
+		s.status.Mismatches = res.Mismatches
+		s.status.HintsChecked = res.HintsChecked
+		s.status.HintsDropped = res.HintsDropped
+		s.status.Passes++
 		s.mu.Unlock()
 	}()
 
 	metas, err := s.store.List()
 	if err != nil {
-		return 0, 0, err
+		return res, err
 	}
 	for _, m := range metas {
 		if ctx.Err() != nil {
-			return checked, mismatches, ctx.Err()
+			return res, ctx.Err()
 		}
 		if m.Deleted {
 			continue
@@ -106,26 +129,33 @@ func (s *Scrubber) ScrubOnce(ctx context.Context, manual bool) (checked, mismatc
 		if errors.Is(verr, store.ErrNotFound) {
 			continue
 		}
-		checked++
+		res.Checked++
 		if ok {
 			continue
 		}
-		mismatches++
+		res.Mismatches++
 		s.log.Emit(events.KindScrub, events.LevelWarn, m.Key,
 			fmt.Sprintf("scrub: checksum mismatch for %s on %s", m.Key, s.log.Node()), nil)
 		if _, rerr := s.repair(ctx, m.Key, ReasonScrub); rerr != nil {
 			s.log.Emitf(events.KindScrub, events.LevelErr, m.Key, "scrub: repair of %s failed: %v", m.Key, rerr)
 		}
 	}
-	if (manual && checked > 0) || mismatches > 0 {
+	if hc, hd, herr := s.store.VerifyHints(); herr == nil {
+		res.HintsChecked, res.HintsDropped = hc, hd
+		if hd > 0 {
+			s.log.Emit(events.KindScrub, events.LevelWarn, "",
+				fmt.Sprintf("scrub: dropped %d corrupt parked hint(s) on %s; owners will be repaired from the other replicas", hd, s.log.Node()), nil)
+		}
+	}
+	if (manual && res.Checked > 0) || res.Mismatches > 0 {
 		level := events.LevelOK
-		if mismatches > 0 {
+		if res.Mismatches > 0 {
 			level = events.LevelWarn
 		}
 		s.log.Emit(events.KindScrub, level, "",
-			fmt.Sprintf("scrub pass on %s: %d replicas verified, %d mismatches", s.log.Node(), checked, mismatches), nil)
+			fmt.Sprintf("scrub pass on %s: %d replicas verified, %d mismatches", s.log.Node(), res.Checked, res.Mismatches), nil)
 	}
-	return checked, mismatches, nil
+	return res, nil
 }
 
 // HintReplayer hands parked writes back to their owners once they return.

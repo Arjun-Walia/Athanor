@@ -92,3 +92,20 @@ func TestWalkStartsWithPreference(t *testing.T) {
 		t.Fatalf("walk %v, pref %v", walk, pref.Nodes)
 	}
 }
+
+func TestPositionAndOwners(t *testing.T) {
+	r := New(five, DefaultVNodes, 1)
+	if p := Position(KeyHash("report.pdf")); p < 0 || p >= 1 {
+		t.Fatalf("position out of range: %v", p)
+	}
+	if Position(0) != 0 {
+		t.Fatal("hash 0 should sit at the top of the ring")
+	}
+	pref, _ := r.Preference("report.pdf", 3)
+	if fmt.Sprint(r.Owners("report.pdf", 3)) != fmt.Sprint(pref.Nodes) {
+		t.Fatalf("owners %v, pref %v", r.Owners("report.pdf", 3), pref.Nodes)
+	}
+	if New(nil, 8, 1).Owners("k", 3) != nil {
+		t.Fatal("owners on an empty ring should be nil")
+	}
+}

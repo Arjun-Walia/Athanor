@@ -57,6 +57,10 @@ export default function Events({ events, nodes, initialKind }) {
             <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search messages" aria-label="Search messages" />
           </label>
         </div>
+        <p className="ath-log-count">
+          {rows.length === events.length ? `${rows.length} events` : `${rows.length} of ${events.length} events`}
+          {" · merged from every reachable node · in memory, 1,000 per node"}
+        </p>
         {rows.length === 0 ? (
           <Empty icon="Activity" title="No events match">
             Kill a node, corrupt a replica, or upload a file, and the log fills in.

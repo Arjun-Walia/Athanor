@@ -1,0 +1,56 @@
+# Overlay for a public deployment such as www.athanor.cfd: one origin in
+# front of all five nodes, so the site stays up when any node is stopped.
+#
+#   ATHANOR_PUBLIC_URL=https://www.athanor.cfd \
+#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.public.yml up -d --build
+#
+# The gateway (Caddy) round-robins across the nodes and takes a node out of
+# rotation while its /v1/admin/ready answers 503 (stopped, or too few live
+# peers for a write quorum). Point the tunnel or DNS at port 80 of the
+# gateway. Every node gossips the same public URL, so the dashboard's
+# failover stays on this origin instead of trying node ports that are not
+# reachable from the internet.
+#
+# The per-node host ports from the base file stay open for direct access on
+# the box itself; drop them here if the host is exposed.
+
+services:
+  gateway:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    networks: [athanor]
+    ports: ["${ATHANOR_GATEWAY_PORT:-8080}:80"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    depends_on:
+      node1:
+        condition: service_healthy
+      node2:
+        condition: service_healthy
+      node3:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/v1/admin/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  node1:
+    environment:
+      ATHANOR_PUBLIC_URL: ${ATHANOR_PUBLIC_URL:?set ATHANOR_PUBLIC_URL to the site origin}
+  node2:
+    environment:
+      ATHANOR_PUBLIC_URL: ${ATHANOR_PUBLIC_URL:?set ATHANOR_PUBLIC_URL to the site origin}
+  node3:
+    environment:
+      ATHANOR_PUBLIC_URL: ${ATHANOR_PUBLIC_URL:?set ATHANOR_PUBLIC_URL to the site origin}
+  node4:
+    environment:
+      ATHANOR_PUBLIC_URL: ${ATHANOR_PUBLIC_URL:?set ATHANOR_PUBLIC_URL to the site origin}
+  node5:
+    environment:
+      ATHANOR_PUBLIC_URL: ${ATHANOR_PUBLIC_URL:?set ATHANOR_PUBLIC_URL to the site origin}
+
+volumes:
+  caddy-data:

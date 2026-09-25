@@ -3,5 +3,13 @@
 go.sum text eol=lf
 go.mod text eol=lf
 Dockerfile text eol=lf
-*.yml text eol=lf
+Caddyfile text eol=lf
 Makefile text eol=lf
+*.yml text eol=lf
+*.sh text eol=lf
+*.cjs text eol=lf
+*.js text eol=lf
+*.jsx text eol=lf
+*.css text eol=lf
+*.png binary
+*.woff2 binary

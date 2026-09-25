@@ -1,4 +1,6 @@
 /*
+ * Dashboard styles. Every class is prefixed ath- so nothing here reaches
+ * the landing page. Tokens come from ../theme.css.
  * Athanor control plane. The layout follows the reference: a warm frosted
  * frame on stone, pill navigation, huge light numerals, rounded cards, a tall
  * dark checklist card, and a calendar-like activity grid.
@@ -2606,4 +2608,33 @@
   .ath-timeline-body {
     min-width: 34rem;
   }
+}
+
+/* ---------- readiness and log summary (added with the ready probe) ---------- */
+
+.ath-conn-ready {
+  margin-left: 0.5rem;
+  vertical-align: middle;
+}
+
+.ath-banner.is-warn {
+  background: var(--yellow-soft);
+  color: var(--ink);
+}
+
+.ath-log-count {
+  margin: 0 0 0.75rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.ath-fact {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+}
+
+.ath-fact.is-warn {
+  color: #7b2613;
 }

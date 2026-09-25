@@ -96,7 +96,9 @@ export default function Dashboard() {
             const res = r.results ?? [];
             const checked = res.reduce((s, x) => s + x.checked, 0);
             const bad = res.reduce((s, x) => s + x.mismatches, 0);
-            return `Scrubbed ${res.length} nodes: ${checked} replicas re-hashed, ${bad} mismatch${bad === 1 ? "" : "es"}${bad ? ", repaired from healthy copies" : ""}.`;
+            const dropped = res.reduce((s, x) => s + (x.hints_dropped || 0), 0);
+            const hints = dropped ? `, ${dropped} corrupt hint${dropped === 1 ? "" : "s"} dropped` : "";
+            return `Scrubbed ${res.length} nodes: ${checked} replicas re-hashed, ${bad} mismatch${bad === 1 ? "" : "es"}${bad ? ", repaired from healthy copies" : ""}${hints}.`;
           },
           "Scrub failed",
           (r) => ((r.results ?? []).some((x) => x.mismatches) ? "warn" : "ok"),
@@ -143,6 +145,19 @@ export default function Dashboard() {
 
   const alerts = useMemo(() => events.filter((e) => (e.level === "error" || e.level === "warn") && e.t > seenAt).length, [events, seenAt]);
   const nodes = ov?.nodes ?? [];
+  // Behind a load balancer every node gossips the same public URL; list
+  // each address once, with the nodes it fronts.
+  const switchTargets = useMemo(() => {
+    const byUrl = new Map();
+    for (const n of nodes) {
+      if (!n.public_url || n.public_url === base) continue;
+      const cur = byUrl.get(n.public_url) || { url: n.public_url, ids: [], up: false };
+      cur.ids.push(n.id);
+      cur.up = cur.up || (n.status !== "dead" && n.status !== "stopped");
+      byUrl.set(n.public_url, cur);
+    }
+    return [...byUrl.values()];
+  }, [nodes, base]);
 
   return (
     <div className="ath-app">
@@ -192,18 +207,17 @@ export default function Dashboard() {
                 <span className={`ath-conn-dot is-${status}`} aria-hidden="true" />
                 <span>
                   <strong>{ov?.coordinator || "—"}</strong>
+                  {ov ? <span className={`chip ${ov.ready ? "outline" : "yellow"} ath-conn-ready`}>{ov.ready ? "ready" : "not ready"}</span> : null}
                   <br />
                   <span className="mono">{base || "searching…"}</span>
                 </span>
               </div>
               <MenuLabel>Switch to</MenuLabel>
-              {nodes
-                .filter((n) => n.public_url && n.public_url !== base)
-                .map((n) => (
-                  <MenuItem key={n.id} icon="Server" onSelect={() => connect(n.public_url)} disabled={n.status === "dead" || n.status === "stopped"}>
-                    {n.id} · {n.public_url}
-                  </MenuItem>
-                ))}
+              {switchTargets.map((t) => (
+                <MenuItem key={t.url} icon="Server" onSelect={() => connect(t.url)} disabled={!t.up}>
+                  {t.ids.join(", ")} · {t.url}
+                </MenuItem>
+              ))}
               {nodes.length === 0
                 ? known.map((k) => (
                     <MenuItem key={k} icon="Server" onSelect={() => connect(k)}>
@@ -220,7 +234,12 @@ export default function Dashboard() {
             <>
               {status === "offline" ? (
                 <div className="ath-banner" role="alert">
-                  <Icon.Alert size={16} /> Lost contact with every node ({error}). Showing the last view; retrying.
+                  <Icon.Alert size={16} /> Lost contact with every node ({error}). Showing the last view; retrying with backoff.
+                </div>
+              ) : null}
+              {status === "ok" && ov.ready === false ? (
+                <div className="ath-banner is-warn" role="status">
+                  <Icon.Info size={16} /> {ov.coordinator} is up but not ready: too few live members for W={ov.config.quorum.w}. Writes will be refused until peers return.
                 </div>
               ) : null}
               {page === "overview" ? <Overview ov={ov} events={events} now={now} actions={actions} busy={busy} go={go} /> : null}

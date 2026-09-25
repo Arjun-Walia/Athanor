@@ -2,6 +2,10 @@ syntax = "proto3";
 
 // Node-to-node RPC. Generated Go lives in internal/api/nodepb; regenerate
 // with `make proto` after editing this file.
+//
+// Every call is unary and bounded by the caller's deadline. Servers answer
+// Unavailable for a peer they are partitioned from, and a panic inside a
+// handler is turned into Internal for that one call.
 package athanor.v1;
 
 option go_package = "github.com/Arjun-Walia/Athanor/internal/api/nodepb";
@@ -115,6 +119,8 @@ message ListReplicasResponse {
   // Keys whose bytes an operator flipped and no check has caught yet.
   repeated string tampered = 3;
   uint64 bytes = 4;
+  // Index records on this node that no longer decode and are skipped.
+  uint64 index_errors = 5;
 }
 
 message EventsRequest {
@@ -150,4 +156,9 @@ message ScrubRequest {}
 message ScrubResponse {
   uint64 checked = 1;
   uint64 mismatches = 2;
+  // Parked hints re-hashed on this pass, and how many failed and were
+  // dropped. A corrupt hint is never replayed; the owner is repaired from
+  // the other replicas instead.
+  uint64 hints_checked = 3;
+  uint64 hints_dropped = 4;
 }
