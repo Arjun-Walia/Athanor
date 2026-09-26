@@ -93,6 +93,10 @@ type Config struct {
 	Fast      bool // tighter SWIM timings, for tests
 	Quiet     bool // drop memberlist's own log lines
 	Log       *events.Log
+	// SecretKey, when set (16, 24 or 32 bytes), encrypts every gossip
+	// packet with AES-GCM. A node without the key cannot join or read the
+	// member list.
+	SecretKey []byte
 
 	// Cluster-wide settings ride on gossip: LocalState is sent on push/pull,
 	// MergeState receives peers' state and broadcasts.
@@ -193,6 +197,9 @@ func (m *Membership) Start() error {
 	conf := memberlist.DefaultLANConfig()
 	conf.Name = m.cfg.NodeID
 	conf.Transport = ft
+	if len(m.cfg.SecretKey) > 0 {
+		conf.SecretKey = m.cfg.SecretKey
+	}
 	conf.AdvertiseAddr = ip.String()
 	conf.AdvertisePort = advPort
 	conf.Delegate = &delegate{m: m}

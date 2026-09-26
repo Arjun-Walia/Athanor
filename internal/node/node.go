@@ -15,6 +15,7 @@ package node
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -52,6 +53,9 @@ type Config struct {
 	ReapAfter     time.Duration
 	RebalanceRate float64 // objects per second
 	RPCTimeout    time.Duration
+	// ClusterSecret, when set, encrypts gossip and authenticates every
+	// peer RPC. Every node in a cluster must share it.
+	ClusterSecret string
 	Fast          bool // tighter timings for tests
 	Quiet         bool // no process log output
 }
@@ -89,6 +93,12 @@ type Node struct {
 
 	ring    atomic.Pointer[ring.Ring]
 	cluster atomic.Pointer[ClusterConfig]
+
+	// Short-lived caches for the views the dashboard polls. Several open
+	// dashboards then cost one fan-out per interval, not one each.
+	overview    [2]memo[Overview]
+	eventsCache memo[[]events.Event]
+	cacheTTL    time.Duration
 
 	connMu sync.Mutex
 	conns  map[string]*grpc.ClientConn
@@ -132,6 +142,10 @@ func New(cfg Config) (*Node, error) {
 		clock:    &replica.Clock{},
 		conns:    map[string]*grpc.ClientConn{},
 		bootedAt: time.Now().UTC(),
+		cacheTTL: 300 * time.Millisecond,
+	}
+	if cfg.Fast {
+		n.cacheTTL = 20 * time.Millisecond
 	}
 	n.local = &replica.LocalPeer{Node: cfg.ID, Store: st, Clock: n.clock}
 	n.ring.Store(ring.New([]string{cfg.ID}, cfg.VNodes, 0))
@@ -173,8 +187,14 @@ func New(cfg Config) (*Node, error) {
 		return nil, fmt.Errorf("node: http addr: %w", err)
 	}
 
+	var gossipKey []byte
+	if cfg.ClusterSecret != "" {
+		k := sha256.Sum256([]byte("athanor-gossip:" + cfg.ClusterSecret))
+		gossipKey = k[:]
+	}
 	n.mem = membership.New(membership.Config{
 		NodeID:     cfg.ID,
+		SecretKey:  gossipKey,
 		Bind:       cfg.GossipAddr,
 		Advertise:  cfg.Advertise,
 		GRPCPort:   grpcPort,
@@ -498,6 +518,57 @@ func splitPort(addr string) (string, int, error) {
 		return "", 0, err
 	}
 	return host, port, nil
+}
+
+// Secured reports whether peer RPC and gossip require the cluster secret.
+func (n *Node) Secured() bool { return n.cfg.ClusterSecret != "" }
+
+// memo caches one computed value for a short time. Callers that arrive
+// while a computation is running wait for it rather than starting another,
+// so a burst of identical requests costs one fan-out.
+type memo[T any] struct {
+	mu      sync.Mutex
+	compute sync.Mutex
+	at      time.Time
+	val     T
+	ok      bool
+}
+
+func (m *memo[T]) get(ttl time.Duration, fn func() (T, error)) (T, error) {
+	m.mu.Lock()
+	if m.ok && time.Since(m.at) < ttl {
+		v := m.val
+		m.mu.Unlock()
+		return v, nil
+	}
+	m.mu.Unlock()
+
+	m.compute.Lock()
+	defer m.compute.Unlock()
+	// Someone may have filled it while we waited for the compute lock.
+	m.mu.Lock()
+	if m.ok && time.Since(m.at) < ttl {
+		v := m.val
+		m.mu.Unlock()
+		return v, nil
+	}
+	m.mu.Unlock()
+
+	v, err := fn()
+	if err != nil {
+		return v, err
+	}
+	m.mu.Lock()
+	m.val, m.at, m.ok = v, time.Now(), true
+	m.mu.Unlock()
+	return v, nil
+}
+
+// invalidate drops whatever is cached, so the next caller recomputes.
+func (m *memo[T]) invalidate() {
+	m.mu.Lock()
+	m.ok = false
+	m.mu.Unlock()
 }
 
 // compile-time interface check

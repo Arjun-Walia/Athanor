@@ -21,6 +21,7 @@ desktop/dist/
 .env
 .env.*
 !.env.example
+deploy/athanor.env
 
 # Editor, tooling and OS
 .idea/

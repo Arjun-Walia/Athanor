@@ -87,7 +87,18 @@ export function useCluster() {
   const [feed, setFeed] = useState("poll");
 
   const baseRef = useRef(null);
-  const knownRef = useRef(initialCandidates());
+  // Candidate list: state for the connection menu, a ref for the loops.
+  const [known, setKnown] = useState(initialCandidates);
+  const knownRef = useRef(known);
+  useEffect(() => {
+    knownRef.current = known;
+  }, [known]);
+  const addKnown = useCallback((url) => {
+    if (!knownRef.current.includes(url)) {
+      knownRef.current = [...knownRef.current, url];
+      setKnown(knownRef.current);
+    }
+  }, []);
   const eventMap = useRef(new Map());
   const ringVersion = useRef(null);
   const misses = useRef(0);
@@ -99,7 +110,10 @@ export function useCluster() {
     baseRef.current = next;
     setBase(next);
     localStorage.setItem(STORAGE_KEY, next);
-    if (!knownRef.current.includes(next)) knownRef.current.unshift(next);
+    if (!knownRef.current.includes(next)) {
+      knownRef.current = [next, ...knownRef.current];
+      setKnown(knownRef.current);
+    }
     ringVersion.current = null;
     misses.current = 0;
     setNonce((n) => n + 1);
@@ -150,7 +164,7 @@ export function useCluster() {
           if (cancelled) return;
           for (const n of ov.nodes ?? []) {
             const url = trimBase(n.public_url);
-            if (url && usableFromHere(url) && !knownRef.current.includes(url)) knownRef.current.push(url);
+            if (url && usableFromHere(url)) addKnown(url);
           }
           setOverview(ov);
           setStatus("ok");
@@ -206,7 +220,14 @@ export function useCluster() {
       window.removeEventListener("online", onOnline);
       ctrl.abort();
     };
-  }, [nonce]);
+  }, [nonce, addKnown]);
+
+  // A notice is a one-off message for the toast tray; it clears itself.
+  useEffect(() => {
+    if (!notice) return undefined;
+    const t = setTimeout(() => setNotice(null), 6000);
+    return () => clearTimeout(t);
+  }, [notice]);
 
   // Event feed: server-sent events when the node offers them, polling
   // otherwise. The stream carries a snapshot first, then only new lines.
@@ -278,7 +299,7 @@ export function useCluster() {
     };
   }, [nonce, absorb]);
 
-  return { base, overview, ring, events, status, error, notice, dismissNotice, refresh, connect, feed, known: knownRef.current };
+  return { base, overview, ring, events, status, error, notice, dismissNotice, refresh, connect, feed, known };
 }
 
 /** A clock that re-renders every `every` ms. */

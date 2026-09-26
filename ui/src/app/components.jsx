@@ -104,30 +104,73 @@ export function CornerLink({ onClick, label }) {
   );
 }
 
-/** A small popover menu. Closes on outside click and Escape. */
+/**
+ * A small popover menu. Closes on outside click and Escape; the arrow keys
+ * move between items, Home/End jump, and focus returns to the button on
+ * close, as the WAI-ARIA menu button pattern asks.
+ */
 export function Menu({ label, icon = "More", children, align = "end", buttonClass = "ath-menu-btn", disabled }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
+  const buttonRef = useRef(null);
+  const popRef = useRef(null);
   const id = useId();
+
   useEffect(() => {
     if (!open) return undefined;
     const onDown = (e) => {
       if (ref.current && !ref.current.contains(e.target)) setOpen(false);
     };
-    const onKey = (e) => {
-      if (e.key === "Escape") setOpen(false);
-    };
     document.addEventListener("pointerdown", onDown);
-    document.addEventListener("keydown", onKey);
+    // Focus the first item once the popover is in the DOM.
+    const raf = window.requestAnimationFrame(() => popRef.current?.querySelector('[role="menuitem"]:not(:disabled)')?.focus());
     return () => {
       document.removeEventListener("pointerdown", onDown);
-      document.removeEventListener("keydown", onKey);
+      window.cancelAnimationFrame(raf);
     };
   }, [open]);
+
+  const close = () => {
+    setOpen(false);
+    buttonRef.current?.focus();
+  };
+
+  const onKeyDown = (e) => {
+    const items = [...(popRef.current?.querySelectorAll('[role="menuitem"]:not(:disabled)') ?? [])];
+    const i = items.indexOf(document.activeElement);
+    switch (e.key) {
+      case "Escape":
+        e.preventDefault();
+        close();
+        break;
+      case "ArrowDown":
+        e.preventDefault();
+        items[(i + 1) % items.length]?.focus();
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        items[(i - 1 + items.length) % items.length]?.focus();
+        break;
+      case "Home":
+        e.preventDefault();
+        items[0]?.focus();
+        break;
+      case "End":
+        e.preventDefault();
+        items[items.length - 1]?.focus();
+        break;
+      case "Tab":
+        setOpen(false);
+        break;
+      default:
+    }
+  };
+
   const I = Icon[icon];
   return (
     <div className={`ath-menu is-${align}`} ref={ref}>
       <button
+        ref={buttonRef}
         type="button"
         className={buttonClass}
         aria-haspopup="menu"
@@ -137,11 +180,29 @@ export function Menu({ label, icon = "More", children, align = "end", buttonClas
         title={label}
         disabled={disabled}
         onClick={() => setOpen((o) => !o)}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown" && !open) {
+            e.preventDefault();
+            setOpen(true);
+          }
+        }}
       >
         <I size={18} />
       </button>
       {open ? (
-        <div className="ath-menu-pop" role="menu" id={id} onClick={() => setOpen(false)}>
+        <div
+          className="ath-menu-pop"
+          role="menu"
+          id={id}
+          tabIndex={-1}
+          ref={popRef}
+          onKeyDown={onKeyDown}
+          // Choosing an item closes the menu; a form inside it (the token
+          // field) keeps it open.
+          onClick={(e) => {
+            if (e.target.closest('[role="menuitem"]')) setOpen(false);
+          }}
+        >
           {children}
         </div>
       ) : null}

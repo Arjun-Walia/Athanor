@@ -14,7 +14,8 @@
   /* ink */
   --ink: #1d1d1b;
   --ink-2: #45453f;
-  --muted: #74736c;
+  /* 5.2:1 on the cream wash, so small captions pass AA as well. */
+  --muted: #66655e;
   --faint: #a9a79e;
 
   /* surfaces */

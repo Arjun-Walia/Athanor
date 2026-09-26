@@ -1208,9 +1208,13 @@ html:has(.ln-root) {
 }
 
 .ln-manifesto-word {
-  /* faint until --p passes this word's --w, then ink over a short ramp */
-  opacity: calc(0.16 + 0.84 * clamp(0, (var(--p) - var(--w)) * 8, 1));
-  transition: opacity 0.15s linear;
+  /* Muted until --p passes this word's --w, then ink over a short ramp.
+     Both ends meet the AA contrast ratio, so the effect never makes the
+     sentence unreadable, only quieter. */
+  --fill: clamp(0, (var(--p) - var(--w)) * 8, 1);
+  color: var(--muted);
+  color: color-mix(in srgb, var(--ink) calc(var(--fill) * 100%), var(--muted));
+  transition: color 0.15s linear;
 }
 
 /* ================================================================== */
@@ -1591,12 +1595,15 @@ html:has(.ln-root) {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  opacity: 0.32;
-  transition: opacity 0.5s var(--ln-ease);
+  /* Resting steps are quieter through colour, not opacity, so every line
+     stays above the AA contrast ratio; the active step goes to full ink. */
+  --step-ink: var(--ink-2);
+  transition: transform 0.5s var(--ln-ease);
 }
 
 .ln-how-step.is-active {
-  opacity: 1;
+  --step-ink: var(--ink);
+  transform: translateX(0.25rem);
 }
 
 .ln-how-step:last-child {
@@ -1631,7 +1638,7 @@ html:has(.ln-root) {
   margin: 0 0 0.6rem;
   font-size: 0.8rem;
   letter-spacing: 0.16em;
-  color: var(--muted);
+  color: var(--step-ink);
 }
 
 .ln-how-step-title {
@@ -1641,6 +1648,8 @@ html:has(.ln-root) {
   line-height: 1.08;
   letter-spacing: -0.035em;
   text-wrap: balance;
+  color: var(--step-ink);
+  transition: color 0.5s var(--ln-ease);
 }
 
 .ln-how-step-body {
@@ -2763,7 +2772,7 @@ html:has(.ln-root) {
   }
 
   .ln-manifesto-word {
-    opacity: 1;
+    color: var(--ink);
   }
 
   .ln-hero-stage {

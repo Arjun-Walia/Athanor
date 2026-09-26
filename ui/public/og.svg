@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <!-- Social preview for www.athanor.cfd. Rendered to og.jpg (1200x630). -->
+  <defs>
+    <linearGradient id="wash" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ecebe8"/>
+      <stop offset="0.55" stop-color="#f4f1e6"/>
+      <stop offset="1" stop-color="#f7e8ae"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#fff3c2" stop-opacity="0.95"/>
+      <stop offset="0.5" stop-color="#f6cf45" stop-opacity="0.3"/>
+      <stop offset="1" stop-color="#f6cf45" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#wash)"/>
+  <g transform="translate(965 315)">
+    <circle r="225" fill="url(#glow)"/>
+    <circle r="190" fill="none" stroke="#1d1d1b" stroke-opacity="0.18" stroke-width="2"/>
+    <circle r="190" fill="none" stroke="#e9b820" stroke-width="4" stroke-dasharray="120 1074" stroke-linecap="round" transform="rotate(-60)"/>
+    <g stroke="#1d1d1b" stroke-opacity="0.1" stroke-width="1.5">
+      <line x1="0" y1="0" x2="58.7" y2="-180.7"/><line x1="0" y1="0" x2="180.7" y2="-58.7"/><line x1="0" y1="0" x2="111.7" y2="153.7"/><line x1="0" y1="0" x2="-111.7" y2="153.7"/><line x1="0" y1="0" x2="-180.7" y2="-58.7"/>
+    </g>
+    <circle r="8" fill="#1d1d1b"/>
+    <g font-family="Outfit, Avenir Next, Helvetica Neue, Arial, sans-serif" font-size="16" font-weight="600" text-anchor="middle">
+      <g transform="translate(58.7 -180.7)"><circle r="26" fill="#2c2c2a"/><text y="6" fill="#f3f1ea">n1</text></g>
+      <g transform="translate(180.7 -58.7)"><circle r="26" fill="#2c2c2a"/><text y="6" fill="#f3f1ea">n2</text></g>
+      <g transform="translate(111.7 153.7)"><circle r="26" fill="#f6cf45"/><text y="6" fill="#1d1d1b">n3</text></g>
+      <g transform="translate(-111.7 153.7)"><circle r="26" fill="#fbfaf6" stroke="#1d1d1b" stroke-opacity="0.25" stroke-width="2"/><text y="6" fill="#45453f">n4</text></g>
+      <g transform="translate(-180.7 -58.7)"><circle r="26" fill="#fbfaf6" stroke="#1d1d1b" stroke-opacity="0.25" stroke-width="2"/><text y="6" fill="#45453f">n5</text></g>
+    </g>
+  </g>
+  <g transform="translate(80 84)" font-family="Outfit, Avenir Next, Helvetica Neue, Arial, sans-serif">
+    <circle cx="18" cy="18" r="14" fill="none" stroke="#e9b820" stroke-width="4.5" stroke-dasharray="62 26" stroke-linecap="round" transform="rotate(-90 18 18)"/>
+    <circle cx="18" cy="18" r="4.5" fill="#e9b820"/>
+    <text x="48" y="26" font-size="26" fill="#1d1d1b" letter-spacing="-0.5">Athanor</text>
+    <text y="104" font-size="19" fill="#66655e" letter-spacing="4">A FAULT-TOLERANT OBJECT STORE</text>
+    <text y="206" font-size="96" font-weight="300" fill="#1d1d1b" letter-spacing="-3.5">Storage that</text>
+    <rect x="-4" y="268" width="268" height="24" rx="10" fill="#f6cf45" opacity="0.85"/>
+    <text y="306" font-size="96" font-weight="300" fill="#1d1d1b" letter-spacing="-3.5"><tspan font-weight="400">heals</tspan> itself.</text>
+    <text y="380" font-size="26" fill="#45453f">Three copies of every object.</text>
+    <text y="416" font-size="26" fill="#45453f">Kill a node, flip a byte, read it back intact.</text>
+    <text y="478" font-size="21" fill="#66655e">www.athanor.cfd</text>
+  </g>
+</svg>

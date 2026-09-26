@@ -10,6 +10,19 @@ permissions:
   contents: write
 
 jobs:
+  # Static analysis first: vet, staticcheck, and known-vulnerability scan.
+  go-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: gofmt -l . && test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go run honnef.co/go/tools/cmd/staticcheck@latest ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
   go:
     runs-on: ubuntu-latest
     steps:
@@ -17,15 +30,23 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: go vet ./...
-      - run: go test -race -count=1 ./...
+      - run: go test -race -count=1 -coverprofile=coverage.out -covermode=atomic ./...
+      - name: coverage summary
+        run: go tool cover -func=coverage.out | tail -1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: go-coverage
+          path: coverage.out
+          retention-days: 7
       - run: go build -ldflags "-X main.version=${GITHUB_SHA::7}" -o /tmp/vault-node ./cmd/vault-node
-      - name: single node smoke test
+      - name: single node smoke test, with an admin token
         run: |
-          /tmp/vault-node --id smoke --http 127.0.0.1:18080 --grpc 127.0.0.1:19090 --gossip 127.0.0.1:17946 --data /tmp/smoke --n 1 --w 1 --r 1 &
+          /tmp/vault-node --id smoke --http 127.0.0.1:18080 --grpc 127.0.0.1:19090 --gossip 127.0.0.1:17946 --data /tmp/smoke --n 1 --w 1 --r 1 --admin-token ci-token &
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:18080/v1/admin/ready && break; sleep 0.5; done
-          curl -sf -X PUT --data 'hello' http://127.0.0.1:18080/v1/objects/ci.txt
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X PUT --data 'hello' http://127.0.0.1:18080/v1/objects/ci.txt)" = "401"
+          curl -sf -X PUT --data 'hello' -H 'Authorization: Bearer ci-token' http://127.0.0.1:18080/v1/objects/ci.txt
           test "$(curl -sf http://127.0.0.1:18080/v1/objects/ci.txt)" = "hello"
+          curl -sfN --max-time 2 http://127.0.0.1:18080/v1/admin/events/stream | grep -q 'event: snapshot'
           kill %1
 
   ui:
@@ -38,6 +59,12 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
       - run: npm ci
+        working-directory: ui
+      - run: npm audit --audit-level=high
+        working-directory: ui
+      - run: npm run lint
+        working-directory: ui
+      - run: npm test
         working-directory: ui
       - run: npm run build
         working-directory: ui
@@ -85,6 +112,8 @@ jobs:
           name: ui-dist
           path: ui/dist
       - run: npm ci --no-audit --no-fund
+        working-directory: desktop
+      - run: npm audit --audit-level=high
         working-directory: desktop
       - name: package
         working-directory: desktop

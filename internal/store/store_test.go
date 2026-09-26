@@ -340,3 +340,49 @@ func TestVerifyHintsDropsCorruptOnes(t *testing.T) {
 		t.Fatalf("corrupt hint kept: %+v", hints)
 	}
 }
+
+func TestHintCountTracksTheQueue(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.HintCount() != 0 {
+		t.Fatal("fresh store has hints")
+	}
+	if _, err := d.FindHint("k"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("find on an empty queue = %v", err)
+	}
+	body := []byte("parked")
+	meta := metaFor("k", 1, "node1", body)
+	if _, err := d.PutHint("node2", meta, body); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.PutHint("node2", meta, body); err != nil { // same write again: no new entry
+		t.Fatal(err)
+	}
+	if _, err := d.PutHint("node3", meta, body); err != nil {
+		t.Fatal(err)
+	}
+	if d.HintCount() != 2 {
+		t.Fatalf("count = %d, want 2", d.HintCount())
+	}
+	_ = d.Close()
+	d, err = Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if d.HintCount() != 2 {
+		t.Fatalf("count after reopen = %d, want 2", d.HintCount())
+	}
+	if err := d.DeleteHintIf("node2", meta); err != nil {
+		t.Fatal(err)
+	}
+	if d.HintCount() != 1 {
+		t.Fatalf("count after delete = %d, want 1", d.HintCount())
+	}
+	if obj, err := d.FindHint("k"); err != nil || obj.Meta.HintedFor != "node3" {
+		t.Fatalf("find = %+v, %v", obj, err)
+	}
+}

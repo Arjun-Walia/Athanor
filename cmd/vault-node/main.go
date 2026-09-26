@@ -58,6 +58,10 @@ func main() {
 	maxInflight := flag.Int("max-inflight", api.DefaultMaxInflight, "object bodies held in memory at once; more get 503 + Retry-After")
 	shutdown := flag.Duration("shutdown-timeout", 10*time.Second, "how long to drain HTTP on SIGTERM before exiting")
 	serveUI := flag.Bool("ui", true, "serve the embedded dashboard at / and /app when the binary was built with it")
+	adminToken := flag.String("admin-token", "", "bearer token required for writes and admin actions (empty: open, for local demos)")
+	clusterSecret := flag.String("cluster-secret", "", "shared secret that encrypts gossip and authenticates peer RPC (empty: open)")
+	tlsCert := flag.String("tls-cert", "", "serve HTTPS with this certificate (PEM); needs --tls-key")
+	tlsKey := flag.String("tls-key", "", "private key (PEM) for --tls-cert")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	applyEnv()
 	flag.Parse()
@@ -76,9 +80,16 @@ func main() {
 	if err := os.MkdirAll(*dataDir, 0o755); err != nil {
 		log.Fatalf("data dir: %v", err)
 	}
+	if (*tlsCert == "") != (*tlsKey == "") {
+		log.Fatal("--tls-cert and --tls-key go together")
+	}
 	if *publicURL == "" {
 		if _, port, err := net.SplitHostPort(*httpAddr); err == nil {
-			*publicURL = "http://localhost:" + port
+			scheme := "http"
+			if *tlsCert != "" {
+				scheme = "https"
+			}
+			*publicURL = scheme + "://localhost:" + port
 		}
 	}
 
@@ -96,12 +107,13 @@ func main() {
 		ScrubInterval: *scrub,
 		ReapAfter:     *reap,
 		RebalanceRate: *rate,
+		ClusterSecret: *clusterSecret,
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	opts := api.Options{MaxUpload: *maxUpload << 20, MaxInflight: *maxInflight, Version: version}
+	opts := api.Options{MaxUpload: *maxUpload << 20, MaxInflight: *maxInflight, Version: version, AdminToken: *adminToken}
 	if *serveUI {
 		if h, ok := webui.Handler(); ok {
 			opts.UI = h
@@ -128,11 +140,20 @@ func main() {
 	if err := nd.Start(); err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("vault-node %s id=%s http=%s grpc=%s gossip=%s data=%s quorum=%s ui=%v",
-		version, *id, *httpAddr, *grpcAddr, *gossipAddr, *dataDir, nd.Quorum(), opts.UI != nil)
+	log.Printf("vault-node %s id=%s http=%s grpc=%s gossip=%s data=%s quorum=%s ui=%v admin-auth=%v secured=%v tls=%v",
+		version, *id, *httpAddr, *grpcAddr, *gossipAddr, *dataDir, nd.Quorum(), opts.UI != nil, *adminToken != "", *clusterSecret != "", *tlsCert != "")
+	if *adminToken == "" && !strings.Contains(*publicURL, "localhost") && !strings.Contains(*publicURL, "127.0.0.1") {
+		log.Printf("warning: %s is reachable without an admin token; anyone can stop nodes and flip bytes (set --admin-token)", *publicURL)
+	}
 
 	go func() {
-		if err := server.Serve(lis); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		var err error
+		if *tlsCert != "" {
+			err = server.ServeTLS(lis, *tlsCert, *tlsKey)
+		} else {
+			err = server.Serve(lis)
+		}
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatal(err)
 		}
 	}()

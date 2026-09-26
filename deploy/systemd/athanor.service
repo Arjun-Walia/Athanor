@@ -1,0 +1,28 @@
+# Athanor public cluster: five nodes, the host gateway, and cloudflared,
+# started by scripts/public-up.sh and stopped by scripts/public-down.sh.
+#
+#   sudo cp deploy/systemd/athanor.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now athanor
+#
+# Edit User and WorkingDirectory to match the checkout on the server.
+# docs/DEPLOY.md has the full walkthrough for an Oracle Cloud VPS.
+
+[Unit]
+Description=Athanor object store (public cluster)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=ubuntu
+WorkingDirectory=/home/ubuntu/Athanor
+# public-up.sh reads deploy/athanor.env for secrets and the public URL.
+Environment=REBUILD=0
+ExecStart=/home/ubuntu/Athanor/scripts/public-up.sh
+ExecStop=/home/ubuntu/Athanor/scripts/public-down.sh
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

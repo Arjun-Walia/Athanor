@@ -28,7 +28,11 @@
 //	DELETE /v1/admin/partitions          heal every partition
 //	POST   /v1/admin/fault/{stop,start,block,unblock}   this node only
 //
-// There is no authentication. This API is for a local demo cluster.
+// Authentication is optional and off by default, which suits a local demo.
+// With Options.AdminToken set, every request that changes something (any
+// method other than GET, HEAD and OPTIONS) must carry
+// "Authorization: Bearer <token>"; reads and the dashboard itself stay
+// open. Nodes forward admin actions to each other with the same token.
 //
 // Fault tolerance at this layer is about staying up under load rather than
 // about replicas: object bodies are held in memory per request, so the
@@ -42,6 +46,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -77,6 +82,7 @@ type Options struct {
 	MaxUpload   int64
 	MaxInflight int    // concurrent object reads and writes; excess gets 503
 	Version     string // reported by / and /v1/admin/health
+	AdminToken  string // when set, mutating requests need a bearer token
 }
 
 // Server serves one node's HTTP API.
@@ -135,7 +141,32 @@ func (s *Server) Handler() http.Handler {
 	} else {
 		mux.HandleFunc("GET /{$}", s.root)
 	}
-	return s.recover(withCORS(s.stamp(mux)))
+	return s.recover(withCORS(s.stamp(s.requireToken(mux))))
+}
+
+// requireToken gates every mutating request behind the admin token.
+func (s *Server) requireToken(next http.Handler) http.Handler {
+	if s.opts.AdminToken == "" {
+		return next
+	}
+	want := []byte(s.opts.AdminToken)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+			next.ServeHTTP(w, r)
+			return
+		}
+		got, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if !ok || subtle.ConstantTimeCompare([]byte(strings.TrimSpace(got)), want) != 1 {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="athanor"`)
+			writeJSON(w, http.StatusUnauthorized, map[string]any{
+				"error": "this cluster requires an admin token for writes and admin actions",
+				"node":  s.node.ID(),
+			})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) root(w http.ResponseWriter, _ *http.Request) {
@@ -177,6 +208,8 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 		"events":       h.Events,
 		"inflight":     len(s.inflight),
 		"max_inflight": s.opts.MaxInflight,
+		"admin_auth":   s.opts.AdminToken != "",
+		"secured":      s.node.Secured(),
 		"ui":           s.opts.UI != nil,
 	})
 }
@@ -606,6 +639,9 @@ func (s *Server) forward(ctx context.Context, id, path string, payload any) (int
 		return marshal(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if s.opts.AdminToken != "" {
+		req.Header.Set("Authorization", "Bearer "+s.opts.AdminToken)
+	}
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return marshal(http.StatusBadGateway, map[string]string{
@@ -813,7 +849,7 @@ func withCORS(next http.Handler) http.Handler {
 		h := w.Header()
 		h.Set("Access-Control-Allow-Origin", "*")
 		h.Set("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS")
-		h.Set("Access-Control-Allow-Headers", "Content-Type")
+		h.Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		h.Set("Access-Control-Expose-Headers",
 			"ETag, Content-Disposition, X-Athanor-Version, X-Athanor-Checksum, X-Athanor-Coordinator, X-Athanor-Replicas, X-Athanor-Degraded")
 		if r.Method == http.MethodOptions {

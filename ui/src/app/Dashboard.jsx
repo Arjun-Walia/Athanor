@@ -3,7 +3,7 @@ import "./dashboard.css";
 import { Icon } from "./icons.jsx";
 import { Menu, MenuItem, MenuLabel, Toasts } from "./components.jsx";
 import { InstallButton } from "../shell.jsx";
-import { api, DEFAULT_BASE } from "./api.js";
+import { api, DEFAULT_BASE, getToken, setToken } from "./api.js";
 import { useCluster, useNow } from "./useCluster.js";
 import Overview from "./pages/Overview.jsx";
 import Nodes from "./pages/Nodes.jsx";
@@ -67,12 +67,6 @@ export default function Dashboard() {
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), tone === "error" ? 9000 : 5500);
   }, []);
 
-  useEffect(() => {
-    if (notice) {
-      notify(notice.tone, notice.text);
-      dismissNotice();
-    }
-  }, [notice, notify, dismissNotice]);
 
   const actions = useMemo(() => {
     const run = async (fn, okText, failText, tone = "ok") => {
@@ -83,7 +77,7 @@ export default function Dashboard() {
         refresh();
         return res;
       } catch (e) {
-        notify("error", `${failText}: ${e.message}`);
+        notify("error", e.status === 401 ? `${failText}: this cluster needs an admin token. Set it under the plug icon.` : `${failText}: ${e.message}`);
         refresh();
         return null;
       }
@@ -129,7 +123,7 @@ export default function Dashboard() {
           refresh();
           return { body };
         } catch (e) {
-          notify("error", `Upload failed: ${e.message}`);
+          notify("error", e.status === 401 ? "Upload refused: this cluster needs an admin token. Set it under the plug icon." : `Upload failed: ${e.message}`);
           return { error: e.message, body: e.body };
         }
       },
@@ -145,7 +139,9 @@ export default function Dashboard() {
   }, [base, notify, refresh]);
 
   const alerts = useMemo(() => events.filter((e) => (e.level === "error" || e.level === "warn") && e.t > seenAt).length, [events, seenAt]);
-  const nodes = ov?.nodes ?? [];
+  const nodes = useMemo(() => ov?.nodes ?? [], [ov]);
+  // Failover notices from the cluster hook join the toast tray.
+  const tray = useMemo(() => (notice ? [...toasts, { id: "notice", tone: notice.tone, text: notice.text }] : toasts), [toasts, notice]);
   // Behind a load balancer every node gossips the same public URL; list
   // each address once, with the nodes it fronts.
   const switchTargets = useMemo(() => {
@@ -220,6 +216,8 @@ export default function Dashboard() {
                   <span className="ath-conn-feed">{feed === "stream" ? "log streamed live (SSE)" : "log polled every 2s"}</span>
                 </span>
               </div>
+              <MenuLabel>Admin token</MenuLabel>
+              <TokenField />
               <MenuLabel>Switch to</MenuLabel>
               {switchTargets.map((t) => (
                 <MenuItem key={t.url} icon="Server" onSelect={() => connect(t.url)} disabled={!t.up}>
@@ -261,8 +259,55 @@ export default function Dashboard() {
           )}
         </main>
       </div>
-      <Toasts items={toasts} onDismiss={(id) => setToasts((t) => t.filter((x) => x.id !== id))} />
+      <Toasts
+        items={tray}
+        onDismiss={(id) => {
+          if (id === "notice") dismissNotice();
+          else setToasts((t) => t.filter((x) => x.id !== id));
+        }}
+      />
     </div>
+  );
+}
+
+/**
+ * Where the admin token goes when a cluster requires one. It stays in this
+ * tab's sessionStorage and is sent only on requests that change something.
+ */
+function TokenField() {
+  const [value, setValue] = useState(() => getToken());
+  const [saved, setSaved] = useState(false);
+  const id = "ath-token";
+  return (
+    <form
+      className="ath-token"
+      onSubmit={(e) => {
+        e.preventDefault();
+        setToken(value.trim());
+        setSaved(true);
+      }}
+    >
+      <label htmlFor={id} className="sr-only">
+        Admin token
+      </label>
+      <span className="ath-input-row is-compact">
+        <Icon.Shield size={15} />
+        <input
+          id={id}
+          type="password"
+          autoComplete="off"
+          value={value}
+          placeholder="only if the cluster asks"
+          onChange={(e) => {
+            setValue(e.target.value);
+            setSaved(false);
+          }}
+        />
+      </span>
+      <button type="submit" className="ath-pill-action">
+        {saved ? "Saved" : "Use"}
+      </button>
+    </form>
   );
 }
 

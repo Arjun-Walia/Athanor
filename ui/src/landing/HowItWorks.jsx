@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { clamp, useLatest, useMediaQuery, useReducedMotion, useScrollFrame } from "./hooks.js";
-import { IconBookmark, IconHash, IconLayers, IconPulse, IconWrench } from "./icons.jsx";
+import { IconHash, IconLayers, IconPulse, IconWrench } from "./icons.jsx";
 
 /*
  * Four steps, pinned. The ring on the left is one SVG whose state is set

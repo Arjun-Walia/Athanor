@@ -10,6 +10,27 @@ export const DEFAULT_BASE = "http://localhost:8081";
 // no local node answers, so an installed app works out of the box.
 export const PUBLIC_BASE = "https://www.athanor.cfd";
 
+// The admin token, when a cluster requires one for writes and admin
+// actions. Kept for the tab only (sessionStorage), never in the URL.
+const TOKEN_KEY = "athanor.token";
+
+export function getToken() {
+  try {
+    return sessionStorage.getItem(TOKEN_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+export function setToken(token) {
+  try {
+    if (token) sessionStorage.setItem(TOKEN_KEY, token);
+    else sessionStorage.removeItem(TOKEN_KEY);
+  } catch {
+    // storage blocked: the token lives for this page load only
+  }
+}
+
 export function trimBase(base) {
   return String(base || "").replace(/\/+$/, "");
 }
@@ -42,8 +63,10 @@ async function request(base, path, { method = "GET", body, headers, signal, time
   const timer = setTimeout(() => ctrl.abort(new DOMException("timed out", "TimeoutError")), timeout);
   const onAbort = () => ctrl.abort(signal.reason);
   signal?.addEventListener("abort", onAbort);
+  const token = method !== "GET" ? getToken() : "";
+  const allHeaders = token ? { ...(headers || {}), Authorization: `Bearer ${token}` } : headers;
   try {
-    const res = await fetch(`${trimBase(base)}${path}`, { method, body, headers, signal: ctrl.signal });
+    const res = await fetch(`${trimBase(base)}${path}`, { method, body, headers: allHeaders, signal: ctrl.signal });
     if (raw) {
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
