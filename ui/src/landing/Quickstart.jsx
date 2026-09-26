@@ -91,7 +91,14 @@ export default function Quickstart() {
         <div className="ln-run-card">
           <div className="ln-tabs" role="tablist" aria-label="Ways to run Athanor">
             {WAYS.map((w) => (
-              <button key={w.id} type="button" role="tab" className={`ln-tab${w.id === way ? " is-on" : ""}`} aria-selected={w.id === way} onClick={() => setWay(w.id)}>
+              <button
+                key={w.id}
+                type="button"
+                role="tab"
+                className={`ln-tab${w.id === way ? " is-on" : ""}`}
+                aria-selected={w.id === way}
+                onClick={() => setWay(w.id)}
+              >
                 {w.tab}
               </button>
             ))}
@@ -110,8 +117,8 @@ export default function Quickstart() {
           <p className="ln-eyebrow">Desktop</p>
           <h3 className="ln-run-title">The same dashboard, as an app.</h3>
           <p className="ln-run-then">
-            Frameless, full screen, and it finds your local cluster before falling back to the hosted one. Installers for macOS,
-            Windows and Linux are built on every release.
+            Frameless, full screen, and it finds your local cluster before falling back to the hosted one. Installers for macOS, Windows and Linux are built on
+            every release.
           </p>
           <InstallButton className="ln-btn ln-btn-yellow ln-btn-lg">
             <IconDownload size="1.05rem" /> Download

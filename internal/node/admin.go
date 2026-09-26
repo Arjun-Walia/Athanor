@@ -18,6 +18,16 @@ import (
 // ErrStopped is returned by operations that need gossip and peer RPC.
 var ErrStopped = errors.New("node is stopped")
 
+// Timeouts for the admin fan-outs. The dashboard polls every 1.5 s, so an
+// inventory that takes longer is treated as "did not answer" for this
+// round rather than holding the whole view back.
+const (
+	inventoryTimeout = 1500 * time.Millisecond
+	eventsTimeout    = time.Second
+	corruptTimeout   = 3 * time.Second
+	scrubTimeout     = 30 * time.Second
+)
+
 // Event is one line of the merged cluster log, as ClusterEvents returns it.
 type Event = events.Event
 
@@ -149,7 +159,7 @@ func (n *Node) inventories(ctx context.Context) map[string]replica.Inventory {
 		wg.Add(1)
 		go func(id string) {
 			defer wg.Done()
-			rctx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+			rctx, cancel := context.WithTimeout(ctx, inventoryTimeout)
 			defer cancel()
 			inv, err := n.Peer(id).Inventory(rctx)
 			if err != nil {
@@ -224,28 +234,31 @@ func (n *Node) buildOverview(ctx context.Context, includeDeleted bool) (Overview
 	return ov, nil
 }
 
-func buildReplicaMap(r *ring.Ring, q replica.Quorum, invs map[string]replica.Inventory, reachable func(string) bool, includeDeleted bool) ([]ObjectView, Metrics) {
-	type holding struct {
-		primary  *store.ObjectMeta
-		hints    []store.ObjectMeta
-		tampered bool
+// holding is what one node holds for one key: a primary replica, parked
+// hints, and whether an operator flipped its bytes.
+type holding struct {
+	primary  *store.ObjectMeta
+	hints    []store.ObjectMeta
+	tampered bool
+}
+
+// holdings is key → node → holding, built from every inventory.
+type holdings map[string]map[string]*holding
+
+func (h holdings) at(key, node string) *holding {
+	if h[key] == nil {
+		h[key] = map[string]*holding{}
 	}
-	byKey := map[string]map[string]*holding{}
-	get := func(key, node string) *holding {
-		if byKey[key] == nil {
-			byKey[key] = map[string]*holding{}
-		}
-		if byKey[key][node] == nil {
-			byKey[key][node] = &holding{}
-		}
-		return byKey[key][node]
+	if h[key][node] == nil {
+		h[key][node] = &holding{}
 	}
-	metrics := Metrics{PolicyOverhead: float64(min(q.N, max(r.Size(), 1))), Complete: true}
-	for _, id := range r.Nodes() {
-		if _, ok := invs[id]; !ok {
-			metrics.Complete = false
-		}
-	}
+	return h[key][node]
+}
+
+// collectHoldings folds the inventories into holdings and counts the
+// physical bytes, hints and tampered copies as it goes.
+func collectHoldings(invs map[string]replica.Inventory, metrics *Metrics) holdings {
+	byKey := holdings{}
 	for node, inv := range invs {
 		tampered := map[string]bool{}
 		for _, k := range inv.Tampered {
@@ -253,7 +266,7 @@ func buildReplicaMap(r *ring.Ring, q replica.Quorum, invs map[string]replica.Inv
 		}
 		for i := range inv.Objects {
 			m := inv.Objects[i]
-			h := get(m.Key, node)
+			h := byKey.at(m.Key, node)
 			h.primary = &m
 			h.tampered = tampered[m.Key]
 			if !m.Deleted {
@@ -261,8 +274,7 @@ func buildReplicaMap(r *ring.Ring, q replica.Quorum, invs map[string]replica.Inv
 			}
 		}
 		for _, m := range inv.Hints {
-			h := get(m.Key, node)
-			h.hints = append(h.hints, m)
+			byKey.at(m.Key, node).hints = append(byKey.at(m.Key, node).hints, m)
 			metrics.Hints++
 			if !m.Deleted {
 				metrics.PhysicalBytes += m.Size
@@ -270,71 +282,105 @@ func buildReplicaMap(r *ring.Ring, q replica.Quorum, invs map[string]replica.Inv
 		}
 		metrics.Tampered += len(inv.Tampered)
 	}
+	return byKey
+}
+
+// newestHeld is the newest version any node holds for a key, primary or
+// hint, or nil when nobody holds anything.
+func newestHeld(holders map[string]*holding) *store.ObjectMeta {
+	var winner *store.ObjectMeta
+	consider := func(m store.ObjectMeta) {
+		if winner == nil || store.Newer(m, *winner) {
+			w := m
+			winner = &w
+		}
+	}
+	for _, h := range holders {
+		for _, m := range h.hints {
+			consider(m)
+		}
+		if h.primary != nil {
+			consider(*h.primary)
+		}
+	}
+	return winner
+}
+
+// replicaViewOf classifies one node's copy against the winner. show is
+// false for a non-owner that holds nothing: there is nothing to draw.
+func replicaViewOf(node string, h *holding, answered, preferred bool, winner *store.ObjectMeta) (rv ReplicaView, show bool) {
+	rv = ReplicaView{Node: node, Preferred: preferred}
+	switch {
+	case !answered:
+		rv.Status = "unreachable"
+		return rv, preferred
+	case h != nil && h.primary != nil:
+		rv.Version = h.primary.Version
+		switch {
+		case h.tampered:
+			rv.Status = "tampered"
+		case !store.SameVersion(*h.primary, *winner):
+			rv.Status = "stale"
+		case !preferred:
+			rv.Status = "extra"
+		default:
+			rv.Status = "ok"
+		}
+		return rv, true
+	case h != nil && len(h.hints) > 0:
+		rv.Status = "hint"
+		rv.Version = h.hints[0].Version
+		rv.HintFor = h.hints[0].HintedFor
+		return rv, true
+	default:
+		rv.Status = "missing"
+		return rv, preferred
+	}
+}
+
+// objectView builds one row of the replica map.
+func objectView(r *ring.Ring, q replica.Quorum, key string, holders map[string]*holding, winner *store.ObjectMeta, invs map[string]replica.Inventory, reachable func(string) bool) ObjectView {
+	pref, _ := r.Preference(key, q.N)
+	inPref := map[string]bool{}
+	for _, p := range pref.Nodes {
+		inPref[p] = true
+	}
+	ov := ObjectView{
+		Key: key, Size: winner.Size, Version: winner.Version, Origin: winner.Origin,
+		Checksum: winner.ChecksumHex(), ContentType: winner.ContentType, WrittenAt: winner.WrittenAt,
+		Deleted: winner.Deleted, Preference: pref.Nodes, Target: len(pref.Nodes),
+	}
+	for _, node := range r.Nodes() {
+		_, answered := invs[node]
+		rv, show := replicaViewOf(node, holders[node], answered && reachable(node), inPref[node], winner)
+		if !show {
+			continue
+		}
+		if rv.Status == "ok" {
+			ov.Healthy++
+		}
+		ov.Replicas = append(ov.Replicas, rv)
+	}
+	ov.UnderReplicated = ov.Healthy < ov.Target
+	return ov
+}
+
+func buildReplicaMap(r *ring.Ring, q replica.Quorum, invs map[string]replica.Inventory, reachable func(string) bool, includeDeleted bool) ([]ObjectView, Metrics) {
+	metrics := Metrics{PolicyOverhead: float64(min(q.N, max(r.Size(), 1))), Complete: true}
+	for _, id := range r.Nodes() {
+		if _, ok := invs[id]; !ok {
+			metrics.Complete = false
+		}
+	}
+	byKey := collectHoldings(invs, &metrics)
 
 	var objects []ObjectView
 	for key, holders := range byKey {
-		var winner *store.ObjectMeta
-		for _, h := range holders {
-			cands := append([]store.ObjectMeta(nil), h.hints...)
-			if h.primary != nil {
-				cands = append(cands, *h.primary)
-			}
-			for i := range cands {
-				if winner == nil || store.Newer(cands[i], *winner) {
-					w := cands[i]
-					winner = &w
-				}
-			}
-		}
+		winner := newestHeld(holders)
 		if winner == nil {
 			continue
 		}
-		pref, _ := r.Preference(key, q.N)
-		inPref := map[string]bool{}
-		for _, p := range pref.Nodes {
-			inPref[p] = true
-		}
-		ov := ObjectView{
-			Key: key, Size: winner.Size, Version: winner.Version, Origin: winner.Origin,
-			Checksum: winner.ChecksumHex(), ContentType: winner.ContentType, WrittenAt: winner.WrittenAt,
-			Deleted: winner.Deleted, Preference: pref.Nodes, Target: len(pref.Nodes),
-		}
-		for _, node := range r.Nodes() {
-			h := holders[node]
-			_, answered := invs[node]
-			rv := ReplicaView{Node: node, Preferred: inPref[node]}
-			switch {
-			case !answered || !reachable(node):
-				if !inPref[node] {
-					continue
-				}
-				rv.Status = "unreachable"
-			case h != nil && h.primary != nil:
-				rv.Version = h.primary.Version
-				switch {
-				case h.tampered:
-					rv.Status = "tampered"
-				case !store.SameVersion(*h.primary, *winner):
-					rv.Status = "stale"
-				case !inPref[node]:
-					rv.Status = "extra"
-				default:
-					rv.Status = "ok"
-					ov.Healthy++
-				}
-			case h != nil && len(h.hints) > 0:
-				rv.Status = "hint"
-				rv.Version = h.hints[0].Version
-				rv.HintFor = h.hints[0].HintedFor
-			default:
-				if !inPref[node] {
-					continue
-				}
-				rv.Status = "missing"
-			}
-			ov.Replicas = append(ov.Replicas, rv)
-		}
-		ov.UnderReplicated = ov.Healthy < ov.Target
+		ov := objectView(r, q, key, holders, winner, invs, reachable)
 		if winner.Deleted {
 			metrics.Tombstones++
 			if !includeDeleted {
@@ -390,7 +436,7 @@ func (n *Node) clusterEvents(ctx context.Context, limit int) []events.Event {
 			wg.Add(1)
 			go func(id string) {
 				defer wg.Done()
-				rctx, cancel := context.WithTimeout(ctx, time.Second)
+				rctx, cancel := context.WithTimeout(ctx, eventsTimeout)
 				defer cancel()
 				evs, err := (&remotePeer{n: n, id: id}).events(rctx, 0, uint32(limit))
 				if err != nil {
@@ -449,7 +495,7 @@ func (n *Node) ScrubAll(ctx context.Context) ([]ScrubResult, error) {
 			if id == n.cfg.ID {
 				pass, err = n.scrubber.ScrubPass(ctx, true)
 			} else {
-				rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+				rctx, cancel := context.WithTimeout(ctx, scrubTimeout)
 				pass, err = (&remotePeer{n: n, id: id}).scrub(rctx)
 				cancel()
 			}
@@ -476,7 +522,7 @@ func (n *Node) Corrupt(ctx context.Context, key, target string) error {
 	if !n.Running() {
 		return ErrStopped
 	}
-	rctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	rctx, cancel := context.WithTimeout(ctx, corruptTimeout)
 	defer cancel()
 	return (&remotePeer{n: n, id: target}).corrupt(rctx, key)
 }

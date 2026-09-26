@@ -4,7 +4,10 @@ import { IconArrowDown, IconArrowUpRight } from "./icons.jsx";
 import { InstallButton } from "../shell.jsx";
 import { DASHBOARD_PATH } from "./site.js";
 
-const HEADLINE = [["Storage", "that"], ["heals", "itself."]];
+const HEADLINE = [
+  ["Storage", "that"],
+  ["heals", "itself."],
+];
 const LINE_START = HEADLINE.map((_, li) => HEADLINE.slice(0, li).reduce((n, line) => n + line.length, 0));
 
 /* ---------- the ring behind the headline ---------- */
@@ -100,7 +103,12 @@ function Ring() {
       ))}
       <circle r="9" className="ln-hero-obj" cx={C} cy={C} />
       {PACKETS.map((p) => (
-        <circle key={p.id} r={p.kind === "repair" ? 8 : 6.5} className={`ln-hero-pk is-${p.kind}`} style={{ "--d": `${p.delay}s`, offsetPath: `path("${p.d}")` }} />
+        <circle
+          key={p.id}
+          r={p.kind === "repair" ? 8 : 6.5}
+          className={`ln-hero-pk is-${p.kind}`}
+          style={{ "--d": `${p.delay}s`, offsetPath: `path("${p.d}")` }}
+        />
       ))}
     </svg>
   );

@@ -150,91 +150,47 @@ type writeOutcome struct {
 	err  error
 }
 
+// graceAfterTimeout is how long a coordinator keeps listening past the
+// per-replica timeout before it stops counting answers.
+const graceAfterTimeout = 500 * time.Millisecond
+
+var errUnreachable = errors.New("unreachable")
+
+// fallbacks hands out sloppy-quorum fallback nodes in ring order, one per
+// unreachable preferred node, so a hint lands on the next healthy node
+// clockwise. It is shared by the goroutines of one request.
+type fallbacks struct {
+	mu    sync.Mutex
+	view  View
+	queue []string
+}
+
+func (f *fallbacks) next() (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for len(f.queue) > 0 {
+		fb := f.queue[0]
+		f.queue = f.queue[1:]
+		if f.view.Reachable(fb) {
+			return fb, true
+		}
+	}
+	return "", false
+}
+
 func (c *Coordinator) write(ctx context.Context, op string, meta store.ObjectMeta, body []byte) (WriteResult, error) {
 	start := time.Now()
 	q := c.view.Quorum()
-	pref, fallbacks := Preference(c.view, meta.Key, q.N)
+	pref, spare := Preference(c.view, meta.Key, q.N)
 	if len(pref) == 0 {
 		return WriteResult{}, ErrEmptyRing
 	}
-
-	// Fallback nodes are handed out in ring order, one per unreachable
-	// preferred node, so a hint lands on the next healthy node clockwise.
-	var fbMu sync.Mutex
-	nextFallback := func() (string, bool) {
-		fbMu.Lock()
-		defer fbMu.Unlock()
-		for len(fallbacks) > 0 {
-			fb := fallbacks[0]
-			fallbacks = fallbacks[1:]
-			if c.view.Reachable(fb) {
-				return fb, true
-			}
-		}
-		return "", false
-	}
-
+	fb := &fallbacks{view: c.view, queue: spare}
 	results := make(chan writeOutcome, len(pref))
 	for _, target := range pref {
-		go func(target string) {
-			rctx, cancel := context.WithTimeout(context.Background(), c.timeout)
-			defer cancel()
-			began := time.Now()
-			var lastErr error
-			if c.view.Reachable(target) {
-				err := c.withRetry(rctx, target, func() error {
-					_, err := c.view.Peer(target).Replicate(rctx, meta, body, op)
-					return err
-				})
-				if err == nil {
-					results <- writeOutcome{ok: true, node: target, ack: Ack{Node: target, Took: time.Since(began)}}
-					return
-				}
-				lastErr = err
-			} else {
-				lastErr = errors.New("unreachable")
-			}
-			for {
-				fb, ok := nextFallback()
-				if !ok {
-					results <- writeOutcome{node: target, err: lastErr}
-					return
-				}
-				if err := c.view.Peer(fb).Hint(rctx, target, meta, body); err != nil {
-					lastErr = err
-					continue
-				}
-				c.log.Emit(events.KindHint, events.LevelWarn, meta.Key,
-					fmt.Sprintf("%s is unreachable; parked %s for it on %s", target, meta.Key, fb),
-					map[string]string{"target": target, "holder": fb, "version": fmt.Sprint(meta.Version)})
-				results <- writeOutcome{ok: true, node: fb, ack: Ack{Node: fb, HintFor: target, Took: time.Since(began)}}
-				return
-			}
-		}(target)
+		go c.writeOne(target, op, meta, body, fb, results)
 	}
-
-	var acks []Ack
-	var failed []string
-	wait := time.NewTimer(c.timeout + 500*time.Millisecond)
-	defer wait.Stop()
-collect:
-	for received := 0; received < len(pref); received++ {
-		select {
-		case r := <-results:
-			if r.ok {
-				acks = append(acks, r.ack)
-				if len(acks) >= q.W {
-					break collect
-				}
-			} else {
-				failed = append(failed, r.node)
-			}
-		case <-ctx.Done():
-			break collect
-		case <-wait.C:
-			break collect
-		}
-	}
+	acks, failed := c.collectAcks(ctx, results, len(pref), q.W)
 
 	took := time.Since(start)
 	res := WriteResult{Meta: meta, Preference: pref, Acks: acks, Quorum: q, Coordinator: c.view.Self(), Took: took}
@@ -249,9 +205,69 @@ collect:
 		level = events.LevelWarn
 	}
 	c.log.Emit(events.KindWrite, level, meta.Key,
-		fmt.Sprintf("%s %s acked by %s (W=%d of N=%d) in %s", op, meta.Key, strings.Join(ackLabels(acks), ", "), q.W, len(pref), roundDur(took)),
+		fmt.Sprintf("%s %s acked by %s (W=%d of N=%d) in %s", op, meta.Key, strings.Join(ackLabels(acks), ", "), q.W, len(pref), RoundDuration(took)),
 		map[string]string{"op": op, "version": fmt.Sprint(meta.Version), "preference": strings.Join(pref, ",")})
 	return res, nil
+}
+
+// writeOne replicates to one preferred node, or parks a hint for it on the
+// next reachable fallback. It sends exactly one outcome.
+func (c *Coordinator) writeOne(target, op string, meta store.ObjectMeta, body []byte, fb *fallbacks, results chan<- writeOutcome) {
+	rctx, cancel := context.WithTimeout(context.Background(), c.timeout)
+	defer cancel()
+	began := time.Now()
+	lastErr := errUnreachable
+	if c.view.Reachable(target) {
+		lastErr = c.withRetry(rctx, target, func() error {
+			_, err := c.view.Peer(target).Replicate(rctx, meta, body, op)
+			return err
+		})
+		if lastErr == nil {
+			results <- writeOutcome{ok: true, node: target, ack: Ack{Node: target, Took: time.Since(began)}}
+			return
+		}
+	}
+	for {
+		holder, ok := fb.next()
+		if !ok {
+			results <- writeOutcome{node: target, err: lastErr}
+			return
+		}
+		if err := c.view.Peer(holder).Hint(rctx, target, meta, body); err != nil {
+			lastErr = err
+			continue
+		}
+		c.log.Emit(events.KindHint, events.LevelWarn, meta.Key,
+			fmt.Sprintf("%s is unreachable; parked %s for it on %s", target, meta.Key, holder),
+			map[string]string{"target": target, "holder": holder, "version": fmt.Sprint(meta.Version)})
+		results <- writeOutcome{ok: true, node: holder, ack: Ack{Node: holder, HintFor: target, Took: time.Since(began)}}
+		return
+	}
+}
+
+// collectAcks waits until W acks arrived, every slot answered, the client
+// gave up, or the deadline passed, whichever comes first.
+func (c *Coordinator) collectAcks(ctx context.Context, results <-chan writeOutcome, slots, need int) (acks []Ack, failed []string) {
+	wait := time.NewTimer(c.timeout + graceAfterTimeout)
+	defer wait.Stop()
+	for received := 0; received < slots; received++ {
+		select {
+		case r := <-results:
+			if !r.ok {
+				failed = append(failed, r.node)
+				continue
+			}
+			acks = append(acks, r.ack)
+			if len(acks) >= need {
+				return acks, failed
+			}
+		case <-ctx.Done():
+			return acks, failed
+		case <-wait.C:
+			return acks, failed
+		}
+	}
+	return acks, failed
 }
 
 type readCandidate struct {
@@ -266,125 +282,38 @@ type readOutcome struct {
 	err  error
 }
 
+// countsTowardR reports whether an answer is evidence for the read quorum:
+// a preferred node answered (found or not), or a fallback actually held a
+// copy. A fallback that holds nothing is no evidence the key is absent.
+func countsTowardR(r readOutcome) bool {
+	if r.err != nil || r.rep.Corrupt {
+		return false
+	}
+	return r.cand.primary || r.rep.Found
+}
+
 // Get reads R replicas and returns the newest one whose bytes verify.
 func (c *Coordinator) Get(ctx context.Context, key string) (ReadResult, error) {
 	start := time.Now()
 	q := c.view.Quorum()
-	pref, fallbacks := Preference(c.view, key, q.N)
+	pref, spare := Preference(c.view, key, q.N)
 	if len(pref) == 0 {
 		return ReadResult{}, ErrEmptyRing
 	}
-
 	// One goroutine per preferred slot. A slot asks its preferred node; if
 	// that node is unreachable or fails, it asks the next healthy fallback,
 	// which may hold a hint for it (a sloppy read).
-	var fbMu sync.Mutex
-	nextFallback := func() (string, bool) {
-		fbMu.Lock()
-		defer fbMu.Unlock()
-		for len(fallbacks) > 0 {
-			fb := fallbacks[0]
-			fallbacks = fallbacks[1:]
-			if c.view.Reachable(fb) {
-				return fb, true
-			}
-		}
-		return "", false
-	}
+	fb := &fallbacks{view: c.view, queue: spare}
 	results := make(chan readOutcome, len(pref))
 	for _, p := range pref {
-		go func(p string) {
-			rctx, cancel := context.WithTimeout(context.Background(), c.timeout)
-			defer cancel()
-			var lastErr error
-			if c.view.Reachable(p) {
-				var rep Replica
-				err := c.withRetry(rctx, p, func() error {
-					var err error
-					rep, err = c.view.Peer(p).GetReplica(rctx, key, true)
-					return err
-				})
-				if err == nil {
-					results <- readOutcome{cand: readCandidate{node: p, primary: true}, rep: rep}
-					return
-				}
-				lastErr = err
-			} else {
-				lastErr = errors.New("unreachable")
-			}
-			for {
-				fb, ok := nextFallback()
-				if !ok {
-					results <- readOutcome{cand: readCandidate{node: p, primary: true}, err: lastErr}
-					return
-				}
-				rep, err := c.view.Peer(fb).GetReplica(rctx, key, true)
-				if err != nil {
-					lastErr = err
-					continue
-				}
-				results <- readOutcome{cand: readCandidate{node: fb, forNode: p}, rep: rep}
-				return
-			}
-		}(p)
+		go c.readOne(p, key, fb, results)
 	}
-
-	// A response counts toward R when a preferred node answered (found or
-	// not), or a fallback actually held a copy. A fallback that holds
-	// nothing is no evidence the key is absent.
-	counts := func(r readOutcome) bool {
-		if r.err != nil || r.rep.Corrupt {
-			return false
-		}
-		return r.cand.primary || r.rep.Found
-	}
-	var got []readOutcome
-	valid := 0
-	wait := time.NewTimer(c.timeout + 500*time.Millisecond)
-	defer wait.Stop()
-collect:
-	for len(got) < len(pref) {
-		select {
-		case r := <-results:
-			got = append(got, r)
-			if counts(r) {
-				valid++
-			}
-			if valid >= q.R {
-				break collect
-			}
-		case <-ctx.Done():
-			break collect
-		case <-wait.C:
-			break collect
-		}
-	}
-
+	got, valid := c.collectReads(ctx, results, len(pref), q.R)
 	// Keep listening in the background so replicas that answer after the
 	// quorum still get compared, and read-repair sees the full picture.
-	remaining := len(pref) - len(got)
-	first := append([]readOutcome(nil), got...)
-	go func() {
-		all := first
-		timeout := time.NewTimer(c.timeout + 500*time.Millisecond)
-		defer timeout.Stop()
-		for i := 0; i < remaining; i++ {
-			select {
-			case r := <-results:
-				all = append(all, r)
-			case <-timeout.C:
-				i = remaining
-			}
-		}
-		c.checkDivergence(key, all)
-	}()
+	go c.watchLateReplies(key, got, results, len(pref)-len(got))
 
-	res := ReadResult{Preference: pref, Quorum: q, Coordinator: c.view.Self()}
-	for _, p := range pref {
-		if !c.view.Reachable(p) {
-			res.Degraded = true
-		}
-	}
+	res := ReadResult{Preference: pref, Quorum: q, Coordinator: c.view.Self(), Degraded: c.anyUnreachable(pref)}
 	if valid < q.R {
 		res.Took = time.Since(start)
 		return res, &QuorumError{Op: "read", Got: valid, Need: q.R, Nodes: outcomeNodes(got)}
@@ -412,6 +341,90 @@ collect:
 			fmt.Sprintf("get %s served degraded: R=%d from %s", key, q.R, strings.Join(statusLabels(res.Replicas), ", ")), nil)
 	}
 	return res, nil
+}
+
+// readOne asks one preferred node, then its fallbacks, and sends exactly
+// one outcome.
+func (c *Coordinator) readOne(p, key string, fb *fallbacks, results chan<- readOutcome) {
+	rctx, cancel := context.WithTimeout(context.Background(), c.timeout)
+	defer cancel()
+	lastErr := errUnreachable
+	if c.view.Reachable(p) {
+		var rep Replica
+		lastErr = c.withRetry(rctx, p, func() error {
+			var err error
+			rep, err = c.view.Peer(p).GetReplica(rctx, key, true)
+			return err
+		})
+		if lastErr == nil {
+			results <- readOutcome{cand: readCandidate{node: p, primary: true}, rep: rep}
+			return
+		}
+	}
+	for {
+		holder, ok := fb.next()
+		if !ok {
+			results <- readOutcome{cand: readCandidate{node: p, primary: true}, err: lastErr}
+			return
+		}
+		rep, err := c.view.Peer(holder).GetReplica(rctx, key, true)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		results <- readOutcome{cand: readCandidate{node: holder, forNode: p}, rep: rep}
+		return
+	}
+}
+
+// collectReads gathers answers until R of them count, every slot answered,
+// the client gave up, or the deadline passed.
+func (c *Coordinator) collectReads(ctx context.Context, results <-chan readOutcome, slots, need int) (got []readOutcome, valid int) {
+	wait := time.NewTimer(c.timeout + graceAfterTimeout)
+	defer wait.Stop()
+	for len(got) < slots {
+		select {
+		case r := <-results:
+			got = append(got, r)
+			if countsTowardR(r) {
+				valid++
+			}
+			if valid >= need {
+				return got, valid
+			}
+		case <-ctx.Done():
+			return got, valid
+		case <-wait.C:
+			return got, valid
+		}
+	}
+	return got, valid
+}
+
+// watchLateReplies drains the answers that arrive after the quorum was
+// met, then hands the whole picture to read-repair.
+func (c *Coordinator) watchLateReplies(key string, first []readOutcome, results <-chan readOutcome, remaining int) {
+	all := append([]readOutcome(nil), first...)
+	timeout := time.NewTimer(c.timeout + graceAfterTimeout)
+	defer timeout.Stop()
+	for i := 0; i < remaining; i++ {
+		select {
+		case r := <-results:
+			all = append(all, r)
+		case <-timeout.C:
+			i = remaining
+		}
+	}
+	c.checkDivergence(key, all)
+}
+
+func (c *Coordinator) anyUnreachable(nodes []string) bool {
+	for _, p := range nodes {
+		if !c.view.Reachable(p) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Coordinator) checkDivergence(key string, all []readOutcome) {
@@ -554,7 +567,9 @@ func joinOrNone(s []string) string {
 	return strings.Join(s, ", ")
 }
 
-func roundDur(d time.Duration) string {
+// RoundDuration formats a latency for the event log: microseconds under a
+// millisecond, tenths of a millisecond under a second, milliseconds above.
+func RoundDuration(d time.Duration) string {
 	switch {
 	case d < time.Millisecond:
 		return d.Round(time.Microsecond).String()

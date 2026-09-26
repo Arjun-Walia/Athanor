@@ -45,13 +45,14 @@ package api
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"math"
 	"net/http"
 	"path"
@@ -75,6 +76,13 @@ const DefaultMaxUpload = 64 << 20
 // DefaultMaxInflight caps object bodies held in memory at once. With the
 // default upload cap that bounds the data plane at 2 GiB of buffers.
 const DefaultMaxInflight = 32
+
+const (
+	forwardTimeout   = 5 * time.Second        // one node asking another's admin API
+	forwardBodyLimit = 1 << 20                // the most of a forwarded answer we relay
+	inflightGrace    = 250 * time.Millisecond // how long a request waits for a body slot
+	jsonBodyLimit    = 1 << 16                // admin JSON request bodies
+)
 
 // Options tune the HTTP surface.
 type Options struct {
@@ -107,7 +115,7 @@ func NewServer(n *node.Node, opts Options) *Server {
 	return &Server{
 		node:     n,
 		opts:     opts,
-		client:   &http.Client{Timeout: 5 * time.Second},
+		client:   &http.Client{Timeout: forwardTimeout},
 		inflight: make(chan struct{}, opts.MaxInflight),
 	}
 }
@@ -141,7 +149,93 @@ func (s *Server) Handler() http.Handler {
 	} else {
 		mux.HandleFunc("GET /{$}", s.root)
 	}
-	return s.recover(withCORS(s.stamp(s.requireToken(mux))))
+	return s.recover(withCORS(s.stamp(s.requireToken(gzipJSON(mux)))))
+}
+
+// gzipJSON compresses JSON answers over a kilobyte for clients that accept
+// it. The overview grows with the object count and is polled constantly;
+// object bodies and the event stream are never touched.
+func gzipJSON(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") || !strings.HasPrefix(r.URL.Path, "/v1/admin/") ||
+			strings.HasSuffix(r.URL.Path, "/events/stream") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		gw := &gzipWriter{ResponseWriter: w}
+		defer gw.close()
+		next.ServeHTTP(gw, r)
+	})
+}
+
+const gzipMinBytes = 1024
+
+// gzipWriter buffers the first kilobyte so tiny answers go out as they are,
+// then switches to gzip for the rest.
+type gzipWriter struct {
+	http.ResponseWriter
+	status  int
+	buf     []byte
+	zw      *gzip.Writer
+	decided bool
+}
+
+func (g *gzipWriter) WriteHeader(status int) { g.status = status }
+
+func (g *gzipWriter) Write(p []byte) (int, error) {
+	if g.decided {
+		if g.zw != nil {
+			return g.zw.Write(p)
+		}
+		return g.ResponseWriter.Write(p)
+	}
+	g.buf = append(g.buf, p...)
+	if len(g.buf) < gzipMinBytes {
+		return len(p), nil
+	}
+	return len(p), g.decide(true)
+}
+
+func (g *gzipWriter) decide(compress bool) error {
+	g.decided = true
+	h := g.ResponseWriter.Header()
+	compress = compress && strings.HasPrefix(h.Get("Content-Type"), "application/json")
+	if compress {
+		h.Set("Content-Encoding", "gzip")
+		h.Add("Vary", "Accept-Encoding")
+		h.Del("Content-Length")
+		g.zw = gzip.NewWriter(g.ResponseWriter)
+	}
+	if g.status != 0 {
+		g.ResponseWriter.WriteHeader(g.status)
+	}
+	buf := g.buf
+	g.buf = nil
+	if g.zw != nil {
+		_, err := g.zw.Write(buf)
+		return err
+	}
+	_, err := g.ResponseWriter.Write(buf)
+	return err
+}
+
+func (g *gzipWriter) close() {
+	if !g.decided {
+		_ = g.decide(false)
+	}
+	if g.zw != nil {
+		_ = g.zw.Close()
+	}
+}
+
+// Flush lets the event stream (which bypasses compression) keep flushing.
+func (g *gzipWriter) Flush() {
+	if f, ok := g.ResponseWriter.(http.Flusher); ok {
+		if !g.decided {
+			_ = g.decide(false)
+		}
+		f.Flush()
+	}
 }
 
 // requireToken gates every mutating request behind the admin token.
@@ -235,7 +329,7 @@ func (s *Server) acquire(w http.ResponseWriter, r *http.Request) (release func()
 	default:
 	}
 	// Give a queued request a short moment rather than refusing at once.
-	wait := time.NewTimer(250 * time.Millisecond)
+	wait := time.NewTimer(inflightGrace)
 	defer wait.Stop()
 	select {
 	case s.inflight <- struct{}{}:
@@ -269,7 +363,7 @@ func (s *Server) recover(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if p := recover(); p != nil {
-				log.Printf("panic in %s %s: %v", r.Method, r.URL.Path, p)
+				slog.Error("panic in handler", "method", r.Method, "path", r.URL.Path, "panic", p)
 				s.node.Log().Emitf("fault", "error", "", "%s recovered from a panic in %s %s: %v", s.node.ID(), r.Method, r.URL.Path, p)
 				writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "internal error", "node": s.node.ID()})
 			}
@@ -369,62 +463,33 @@ func (s *Server) eventStream(w http.ResponseWriter, r *http.Request) {
 	h.Set("Cache-Control", "no-cache, no-transform")
 	h.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
-	_, _ = fmt.Fprint(w, "retry: 2000\n\n")
 
-	every := StreamInterval
-	if q := r.URL.Query().Get("every_ms"); q != "" {
-		if ms, err := strconv.Atoi(q); err == nil && ms >= 100 && ms <= 10000 {
-			every = time.Duration(ms) * time.Millisecond
-		}
-	}
-	// One sequence cursor per node: a node's log is monotonic, so anything
-	// above the cursor is new to this stream.
-	seen := map[string]uint64{}
-	send := func(name string, evs []node.Event) error {
-		raw, err := json.Marshal(evs)
-		if err != nil {
-			return err
-		}
-		if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", name, raw); err != nil {
-			return err
-		}
-		flusher.Flush()
-		return nil
-	}
-	collect := func() []node.Event {
-		all := s.node.ClusterEvents(r.Context(), 400)
-		fresh := all[:0:0]
-		for _, ev := range all {
-			if ev.Seq > seen[ev.Node] {
-				seen[ev.Node] = ev.Seq
-				fresh = append(fresh, ev)
-			}
-		}
-		return fresh
-	}
-
-	if err := send("snapshot", nonNilEvents(collect())); err != nil {
+	out := &sseWriter{w: w, flusher: flusher}
+	if err := out.retry(streamRetry); err != nil {
 		return
 	}
-	tick := time.NewTicker(every)
+	cursor := eventCursor{}
+	if err := out.event("snapshot", nonNilEvents(cursor.fresh(s.node.ClusterEvents(r.Context(), streamWindow)))); err != nil {
+		return
+	}
+	tick := time.NewTicker(streamIntervalFrom(r))
 	defer tick.Stop()
-	ping := time.NewTicker(15 * time.Second)
+	ping := time.NewTicker(streamPing)
 	defer ping.Stop()
 	for {
 		select {
 		case <-r.Context().Done():
 			return
 		case <-ping.C:
-			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
+			if err := out.comment("ping"); err != nil {
 				return
 			}
-			flusher.Flush()
 		case <-tick.C:
-			fresh := collect()
+			fresh := cursor.fresh(s.node.ClusterEvents(r.Context(), streamWindow))
 			if len(fresh) == 0 {
 				continue
 			}
-			if err := send("log", fresh); err != nil {
+			if err := out.event("log", fresh); err != nil {
 				return
 			}
 		}
@@ -433,6 +498,69 @@ func (s *Server) eventStream(w http.ResponseWriter, r *http.Request) {
 
 // StreamInterval is how often the event stream looks for new lines.
 var StreamInterval = time.Second
+
+const (
+	streamWindow = 400              // events fetched per look
+	streamPing   = 15 * time.Second // keepalive comment interval
+	streamRetry  = 2 * time.Second  // what the client waits before reconnecting
+	streamMinMS  = 100
+	streamMaxMS  = 10000
+)
+
+// streamIntervalFrom honours ?every_ms= within sane bounds.
+func streamIntervalFrom(r *http.Request) time.Duration {
+	if q := r.URL.Query().Get("every_ms"); q != "" {
+		if ms, err := strconv.Atoi(q); err == nil && ms >= streamMinMS && ms <= streamMaxMS {
+			return time.Duration(ms) * time.Millisecond
+		}
+	}
+	return StreamInterval
+}
+
+// sseWriter writes server-sent-event frames and flushes after each.
+type sseWriter struct {
+	w       http.ResponseWriter
+	flusher http.Flusher
+}
+
+func (o *sseWriter) retry(d time.Duration) error {
+	_, err := fmt.Fprintf(o.w, "retry: %d\n\n", d.Milliseconds())
+	o.flusher.Flush()
+	return err
+}
+
+func (o *sseWriter) comment(text string) error {
+	_, err := fmt.Fprintf(o.w, ": %s\n\n", text)
+	o.flusher.Flush()
+	return err
+}
+
+func (o *sseWriter) event(name string, evs []node.Event) error {
+	raw, err := json.Marshal(evs)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(o.w, "event: %s\ndata: %s\n\n", name, raw); err != nil {
+		return err
+	}
+	o.flusher.Flush()
+	return nil
+}
+
+// eventCursor remembers the highest sequence seen per node. A node's log is
+// monotonic, so anything above its cursor is new to this stream.
+type eventCursor map[string]uint64
+
+func (c eventCursor) fresh(all []node.Event) []node.Event {
+	fresh := all[:0:0]
+	for _, ev := range all {
+		if ev.Seq > c[ev.Node] {
+			c[ev.Node] = ev.Seq
+			fresh = append(fresh, ev)
+		}
+	}
+	return fresh
+}
 
 func nonNilEvents(evs []node.Event) []node.Event {
 	if evs == nil {
@@ -648,8 +776,8 @@ func (s *Server) forward(ctx context.Context, id, path string, payload any) (int
 			"error": fmt.Sprintf("could not reach %s's admin API at %s: %v", id, m.HTTPAddr, err),
 		})
 	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	defer func() { _ = resp.Body.Close() }()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, forwardBodyLimit))
 	return resp.StatusCode, raw
 }
 
@@ -807,7 +935,7 @@ func nonNil(s []string) []string {
 }
 
 func decodeBody(r *http.Request, v any) error {
-	dec := json.NewDecoder(io.LimitReader(r.Body, 1<<16))
+	dec := json.NewDecoder(io.LimitReader(r.Body, jsonBodyLimit))
 	if err := dec.Decode(v); err != nil {
 		return fmt.Errorf("invalid JSON body: %w", err)
 	}
@@ -840,7 +968,7 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(body); err != nil {
-		log.Printf("write json: %v", err)
+		slog.Warn("write json", "err", err)
 	}
 }
 

@@ -98,9 +98,7 @@ export default function Playground() {
         <h2 id="ln-quorum-title" className="ln-h2">
           Three dials. One rule.
         </h2>
-        <p className="ln-intro">
-          Keep W + R above N and every read overlaps the last acknowledged write. Everything else is a trade.
-        </p>
+        <p className="ln-intro">Keep W + R above N and every read overlaps the last acknowledged write. Everything else is a trade.</p>
       </header>
 
       <div className="ln-play ln-reveal" ref={bodyRef}>
@@ -109,8 +107,17 @@ export default function Playground() {
             {PRESETS.map((p) => {
               const on = p.n === n && p.w === w && p.r === r;
               return (
-                <button key={p.name} type="button" className={`ln-preset${on ? " is-on" : ""}`} aria-pressed={on} onClick={() => setQ({ n: p.n, w: p.w, r: p.r })}>
-                  {p.name} <span className="num">{p.n}/{p.w}/{p.r}</span>
+                <button
+                  key={p.name}
+                  type="button"
+                  className={`ln-preset${on ? " is-on" : ""}`}
+                  aria-pressed={on}
+                  onClick={() => setQ({ n: p.n, w: p.w, r: p.r })}
+                >
+                  {p.name}{" "}
+                  <span className="num">
+                    {p.n}/{p.w}/{p.r}
+                  </span>
                 </button>
               );
             })}

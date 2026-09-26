@@ -24,12 +24,12 @@ func freePort(t *testing.T) int {
 			t.Fatal(err)
 		}
 		port := l.Addr().(*net.TCPAddr).Port
-		l.Close()
+		_ = l.Close()
 		u, err := net.ListenPacket("udp", "127.0.0.1:"+strconv.Itoa(port))
 		if err != nil {
 			continue
 		}
-		u.Close()
+		_ = u.Close()
 		return port
 	}
 	t.Fatal("no free port")
@@ -328,7 +328,7 @@ func TestNodeRestartKeepsPolicyAndClock(t *testing.T) {
 	}
 
 	n = mk()
-	defer n.Close()
+	defer func() { _ = n.Close() }()
 	if got := n.ClusterConfig(); got.Version != cfg.Version || got.Origin != cfg.Origin {
 		t.Fatalf("policy after restart = %+v, want %+v", got, cfg)
 	}

@@ -45,8 +45,7 @@ function KeyLookup({ base, onPlacement, placement }) {
       {placement ? (
         <div className="ath-placement">
           <p>
-            <span className="mono">{placement.key}</span> hashes to{" "}
-            <span className="num">{(placement.pos * 360).toFixed(1)}°</span>. Walking clockwise:
+            <span className="mono">{placement.key}</span> hashes to <span className="num">{(placement.pos * 360).toFixed(1)}°</span>. Walking clockwise:
           </p>
           <ol>
             {placement.preference.map((id, i) => (
@@ -55,9 +54,7 @@ function KeyLookup({ base, onPlacement, placement }) {
               </li>
             ))}
           </ol>
-          {placement.fallbacks?.length ? (
-            <p className="ath-muted">Hint fallbacks if an owner is down: {placement.fallbacks.join(" → ")}</p>
-          ) : null}
+          {placement.fallbacks?.length ? <p className="ath-muted">Hint fallbacks if an owner is down: {placement.fallbacks.join(" → ")}</p> : null}
         </div>
       ) : null}
     </form>
@@ -65,7 +62,10 @@ function KeyLookup({ base, onPlacement, placement }) {
 }
 
 function NodeCard({ n, all, ov, actions, now }) {
-  const tone = nodeTone(n.id, all.map((x) => x.id));
+  const tone = nodeTone(
+    n.id,
+    all.map((x) => x.id),
+  );
   const down = n.status === "dead" || n.status === "stopped" || n.status === "unknown";
   const others = all.filter((x) => x.id !== n.id);
   const agrees = !n.ring_digest || n.ring_digest === ov.ring_digest;

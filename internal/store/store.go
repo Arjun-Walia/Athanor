@@ -739,7 +739,7 @@ func (d *Disk) verifyFile(path string, meta ObjectMeta) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	h := sha256.New()
 	n, err := io.Copy(h, f)
 	if err != nil {
@@ -813,12 +813,12 @@ func writeFileAtomic(path string, body []byte) error {
 	tmp := f.Name()
 	cleanup := func() { _ = os.Remove(tmp) }
 	if _, err := f.Write(body); err != nil {
-		f.Close()
+		_ = f.Close()
 		cleanup()
 		return fmt.Errorf("store: write payload: %w", err)
 	}
 	if err := f.Sync(); err != nil {
-		f.Close()
+		_ = f.Close()
 		cleanup()
 		return fmt.Errorf("store: fsync payload: %w", err)
 	}

@@ -29,9 +29,7 @@ export default function Footer() {
               <span>Athanor</span>
             </a>
             <p>Six phases in the plan. All of them shipped.</p>
-            <p className="ln-footer-not">
-              Chosen not to build: {NOT_BUILT.join(", ")}.
-            </p>
+            <p className="ln-footer-not">Chosen not to build: {NOT_BUILT.join(", ")}.</p>
           </div>
           <nav className="ln-footer-links" aria-label="Project links">
             <ul>

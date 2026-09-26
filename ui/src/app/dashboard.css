@@ -418,8 +418,7 @@
   min-height: 22rem;
   padding: 0;
   overflow: hidden;
-  background:
-    radial-gradient(90% 70% at 50% 35%, #f7f3e7 0%, #e6e1d5 55%, #cfc7b6 100%);
+  background: radial-gradient(90% 70% at 50% 35%, #f7f3e7 0%, #e6e1d5 55%, #cfc7b6 100%);
   border-color: rgba(255, 255, 255, 0.5);
 }
 
@@ -1029,7 +1028,9 @@
   border-radius: 0.7rem;
   background: var(--tone);
   color: var(--ink, #fff);
-  box-shadow: 0 6px 14px -8px rgba(0, 0, 0, 0.5), inset 0 -3px 0 rgba(0, 0, 0, 0.15);
+  box-shadow:
+    0 6px 14px -8px rgba(0, 0, 0, 0.5),
+    inset 0 -3px 0 rgba(0, 0, 0, 0.15);
 }
 
 .ath-node-tile.is-lg {
@@ -1325,7 +1326,9 @@
   height: 1.5rem;
   border-radius: 50%;
   flex: none;
-  transition: transform 0.3s var(--ease-spring), background 0.3s;
+  transition:
+    transform 0.3s var(--ease-spring),
+    background 0.3s;
 }
 
 .ath-rdot.is-sm {
@@ -1482,7 +1485,9 @@
   background: rgba(255, 255, 255, 0.72);
   font-size: 0.9rem;
   font-weight: 450;
-  transition: transform 0.2s var(--ease-spring), background 0.2s;
+  transition:
+    transform 0.2s var(--ease-spring),
+    background 0.2s;
 }
 
 .ath-pill-action:hover:not(:disabled) {
@@ -1967,7 +1972,9 @@
   font-size: 0.9rem;
   color: var(--ink-2);
   cursor: pointer;
-  transition: background 0.2s, border-color 0.2s;
+  transition:
+    background 0.2s,
+    border-color 0.2s;
 }
 
 .ath-drop:hover,

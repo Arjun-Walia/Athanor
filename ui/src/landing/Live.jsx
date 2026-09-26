@@ -84,8 +84,8 @@ export default function Live() {
           </li>
           <li>
             <IconCheck size="0.95rem" />
-            <b className="num">{m.objects ?? 0}</b> object{m.objects === 1 ? "" : "s"} · <b className="num">{slots ? Math.round((healthy / slots) * 100) : 100}%</b> of
-            replica slots verified
+            <b className="num">{m.objects ?? 0}</b> object{m.objects === 1 ? "" : "s"} ·{" "}
+            <b className="num">{slots ? Math.round((healthy / slots) * 100) : 100}%</b> of replica slots verified
           </li>
           <li>
             <IconWrench size="0.95rem" />

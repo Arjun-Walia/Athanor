@@ -70,14 +70,7 @@ function Scene({ step }) {
   return (
     <svg className="ln-how-ring" viewBox={`0 0 ${SIZE} ${SIZE}`} aria-hidden="true" focusable="false" data-step={step}>
       <circle cx={C} cy={C} r={R} className="ln-how-track" />
-      <circle
-        cx={C}
-        cy={C}
-        r={R}
-        className="ln-how-vnodes"
-        strokeDasharray={`1.6 ${f((2 * Math.PI * R) / 60 - 1.6)}`}
-        transform={`rotate(-90 ${C} ${C})`}
-      />
+      <circle cx={C} cy={C} r={R} className="ln-how-vnodes" strokeDasharray={`1.6 ${f((2 * Math.PI * R) / 60 - 1.6)}`} transform={`rotate(-90 ${C} ${C})`} />
       {/* step 0: the key lands on the ring */}
       <path className="ln-how-keypath" d={`M${C} ${C} L${KEY[0]} ${KEY[1]}`} />
       <circle className="ln-how-obj" cx={C} cy={C} r="11" />
@@ -120,11 +113,13 @@ function Scene({ step }) {
       ))}
       <g className="ln-how-caption">
         <rect x={C - 118} y={SIZE - 46} width="236" height="30" rx="15" />
-        {["hash → 141° on the ring", "owners n1, n2, n3 · acked by two", "n2 is dead · hint parked on n4", "n3 healed from n1 · n2 gets its hint"].map((t, i) => (
-          <text key={i} x={C} y={SIZE - 26} className="ln-how-caption-text" style={{ "--i": i }}>
-            {t}
-          </text>
-        ))}
+        {["hash → 141° on the ring", "owners n1, n2, n3 · acked by two", "n2 is dead · hint parked on n4", "n3 healed from n1 · n2 gets its hint"].map(
+          (t, i) => (
+            <text key={i} x={C} y={SIZE - 26} className="ln-how-caption-text" style={{ "--i": i }}>
+              {t}
+            </text>
+          ),
+        )}
       </g>
     </svg>
   );

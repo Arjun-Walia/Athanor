@@ -147,6 +147,46 @@ func (r *Repairer) repair(ctx context.Context, key string, reason Reason) (Repor
 	replies := r.survey(ctx, key)
 	report.Surveyed = len(replies)
 
+	winner, found := pickWinner(replies)
+	if !found {
+		report.Corrupt = corruptNodes(replies)
+		report.Took = time.Since(start)
+		if len(report.Corrupt) == 0 {
+			return report, nil
+		}
+		r.log.Emit(events.KindRepair, events.LevelErr, key,
+			fmt.Sprintf("%s: checksum mismatch on %s and no healthy replica is reachable", key, strings.Join(report.Corrupt, ", ")),
+			map[string]string{"reason": string(reason)})
+		return report, ErrNoHealthyReplica
+	}
+	report.Winner = winner.Meta
+
+	source, body, err := r.fetchWinner(ctx, key, winner.Meta, replies)
+	if err != nil {
+		report.Took = time.Since(start)
+		return report, err
+	}
+	report.Source = source
+	r.pushWinner(ctx, pref, replies, winner, body, reason, &report)
+	report.Took = time.Since(start)
+
+	if report.Healed() {
+		r.log.Emit(events.KindRepair, events.LevelOK, key, describe(report),
+			map[string]string{
+				"reason":   string(reason),
+				"source":   source,
+				"pushed":   strings.Join(report.Pushed, ","),
+				"micros":   fmt.Sprint(report.Took.Microseconds()),
+				"version":  fmt.Sprint(winner.Meta.Version),
+				"surveyed": fmt.Sprint(report.Surveyed),
+			})
+	}
+	return report, nil
+}
+
+// pickWinner is the newest verified copy anyone answered with. Nodes are
+// visited in sorted order so ties resolve the same way everywhere.
+func pickWinner(replies map[string]replica.Replica) (replica.Replica, bool) {
 	var winner replica.Replica
 	found := false
 	for _, n := range sortedKeys(replies) {
@@ -158,30 +198,22 @@ func (r *Repairer) repair(ctx context.Context, key string, reason Reason) (Repor
 			winner, found = rep, true
 		}
 	}
-	if !found {
-		for _, n := range sortedKeys(replies) {
-			if replies[n].Corrupt {
-				report.Corrupt = append(report.Corrupt, n)
-			}
-		}
-		if len(report.Corrupt) > 0 {
-			report.Took = time.Since(start)
-			r.log.Emit(events.KindRepair, events.LevelErr, key,
-				fmt.Sprintf("%s: checksum mismatch on %s and no healthy replica is reachable", key, strings.Join(report.Corrupt, ", ")),
-				map[string]string{"reason": string(reason)})
-			return report, ErrNoHealthyReplica
-		}
-		return report, nil
-	}
-	report.Winner = winner.Meta
+	return winner, found
+}
 
-	source, body, err := r.fetchWinner(ctx, key, winner.Meta, replies)
-	if err != nil {
-		report.Took = time.Since(start)
-		return report, err
+func corruptNodes(replies map[string]replica.Replica) []string {
+	var out []string
+	for _, n := range sortedKeys(replies) {
+		if replies[n].Corrupt {
+			out = append(out, n)
+		}
 	}
-	report.Source = source
+	return out
+}
 
+// pushWinner rewrites every reachable owner whose copy is corrupt, missing
+// or stale, recording each in the report by what was wrong with it.
+func (r *Repairer) pushWinner(ctx context.Context, pref []string, replies map[string]replica.Replica, winner replica.Replica, body []byte, reason Reason, report *Report) {
 	for _, p := range pref {
 		if !r.view.Reachable(p) {
 			continue
@@ -209,20 +241,6 @@ func (r *Repairer) repair(ctx context.Context, key string, reason Reason) (Repor
 			report.Pushed = append(report.Pushed, p)
 		}
 	}
-	report.Took = time.Since(start)
-
-	if report.Healed() {
-		r.log.Emit(events.KindRepair, events.LevelOK, key, describe(report),
-			map[string]string{
-				"reason":   string(reason),
-				"source":   source,
-				"pushed":   strings.Join(report.Pushed, ","),
-				"micros":   fmt.Sprint(report.Took.Microseconds()),
-				"version":  fmt.Sprint(winner.Meta.Version),
-				"surveyed": fmt.Sprint(report.Surveyed),
-			})
-	}
-	return report, nil
 }
 
 func (r *Repairer) survey(ctx context.Context, key string) map[string]replica.Replica {
@@ -303,7 +321,7 @@ func describe(rep Report) string {
 		what = "tombstone"
 	}
 	return fmt.Sprintf("%s: %s → %s from %s to %s (%s, %s)",
-		rep.Key, strings.Join(parts, "; "), what, rep.Source, strings.Join(rep.Pushed, ", "), rep.Reason, roundDur(rep.Took))
+		rep.Key, strings.Join(parts, "; "), what, rep.Source, strings.Join(rep.Pushed, ", "), rep.Reason, replica.RoundDuration(rep.Took))
 }
 
 func sortedKeys(m map[string]replica.Replica) []string {
@@ -313,15 +331,4 @@ func sortedKeys(m map[string]replica.Replica) []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-func roundDur(d time.Duration) string {
-	switch {
-	case d < time.Millisecond:
-		return d.Round(time.Microsecond).String()
-	case d < time.Second:
-		return d.Round(100 * time.Microsecond).String()
-	default:
-		return d.Round(time.Millisecond).String()
-	}
 }

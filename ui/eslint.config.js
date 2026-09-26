@@ -31,7 +31,7 @@ export default [
     },
   },
   {
-    files: ["src/**/*.test.js", "vite.config.js", "vitest.config.js", "eslint.config.js"],
+    files: ["src/**/*.test.{js,jsx}", "vite.config.js", "vitest.config.js", "eslint.config.js"],
     languageOptions: { globals: { ...globals.node, ...globals.browser } },
   },
 ];

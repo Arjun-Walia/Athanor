@@ -70,7 +70,11 @@ function HealthBar({ objects }) {
           <div key={s.key} className={`ath-health-seg ${s.cls}`} role="listitem" style={{ flexGrow: Math.max(b[s.key], b.total * 0.08) }}>
             <span className="ath-health-label">{s.label}</span>
             <span className="ath-health-bar num">
-              {pct}%<span className="sr-only"> ({b[s.key]} of {b.total} slots)</span>
+              {pct}%
+              <span className="sr-only">
+                {" "}
+                ({b[s.key]} of {b.total} slots)
+              </span>
             </span>
           </div>
         );
