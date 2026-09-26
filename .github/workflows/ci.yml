@@ -21,6 +21,8 @@ jobs:
       - run: gofmt -l . && test -z "$(gofmt -l .)"
       - run: go vet ./...
       - run: go run honnef.co/go/tools/cmd/staticcheck@latest ./...
+      - run: go run github.com/kisielk/errcheck@latest ./...
+      - run: go run github.com/fzipp/gocyclo/cmd/gocyclo@latest -over 20 $(git ls-files '*.go' | grep -v nodepb)
       - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
   go:
@@ -61,6 +63,8 @@ jobs:
       - run: npm ci
         working-directory: ui
       - run: npm audit --audit-level=high
+        working-directory: ui
+      - run: npm run format:check
         working-directory: ui
       - run: npm run lint
         working-directory: ui

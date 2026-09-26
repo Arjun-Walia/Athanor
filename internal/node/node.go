@@ -113,22 +113,28 @@ type Node struct {
 	restarts  int
 }
 
+// Defaults for a node that does not say otherwise.
+const (
+	defaultRPCTimeout    = 3 * time.Second
+	defaultScrubInterval = 30 * time.Second
+	defaultCacheTTL      = 300 * time.Millisecond
+	fastCacheTTL         = 20 * time.Millisecond
+	readRepairTimeout    = 10 * time.Second
+)
+
 // New opens the store and wires the components. Call Start to join.
 func New(cfg Config) (*Node, error) {
 	if cfg.ID == "" {
 		return nil, errors.New("node: id is required")
 	}
-	if !cfg.Quorum.Valid() {
-		cfg.Quorum = replica.DefaultQuorum()
+	cfg = withDefaults(cfg)
+	_, grpcPort, err := splitPort(cfg.GRPCAddr)
+	if err != nil {
+		return nil, fmt.Errorf("node: grpc addr: %w", err)
 	}
-	if cfg.VNodes <= 0 {
-		cfg.VNodes = ring.DefaultVNodes
-	}
-	if cfg.RPCTimeout <= 0 {
-		cfg.RPCTimeout = 3 * time.Second
-	}
-	if cfg.ScrubInterval <= 0 {
-		cfg.ScrubInterval = 30 * time.Second
+	_, httpPort, err := splitPort(cfg.HTTPAddr)
+	if err != nil {
+		return nil, fmt.Errorf("node: http addr: %w", err)
 	}
 	st, err := store.Open(cfg.DataDir)
 	if err != nil {
@@ -142,87 +148,104 @@ func New(cfg Config) (*Node, error) {
 		clock:    &replica.Clock{},
 		conns:    map[string]*grpc.ClientConn{},
 		bootedAt: time.Now().UTC(),
-		cacheTTL: 300 * time.Millisecond,
+		cacheTTL: defaultCacheTTL,
 	}
 	if cfg.Fast {
-		n.cacheTTL = 20 * time.Millisecond
+		n.cacheTTL = fastCacheTTL
 	}
 	n.local = &replica.LocalPeer{Node: cfg.ID, Store: st, Clock: n.clock}
 	n.ring.Store(ring.New([]string{cfg.ID}, cfg.VNodes, 0))
+	n.restoreState()
+	n.mem = membership.New(n.membershipConfig(grpcPort, httpPort))
 
-	// Restore what the last run knew. The persisted policy wins over the
-	// flags when it exists: it was set on purpose, by an operator, and a
-	// restart must not silently reset the cluster to its defaults.
-	policy := ClusterConfig{Quorum: cfg.Quorum, Version: 0, Origin: cfg.ID}
-	if raw, ok, _ := st.GetMeta(metaPolicy); ok {
+	n.coord = replica.NewCoordinator(n, n.clock, n.log, cfg.RPCTimeout)
+	n.repairer = repair.NewRepairer(n, n.log, cfg.RPCTimeout)
+	n.coord.OnDivergence = n.readRepair
+	n.scrubber = repair.NewScrubber(st, n.repairer.Repair, n.log, cfg.ScrubInterval)
+	n.hints = repair.NewHintReplayer(st, n, n.repairer.Repair, n.log)
+	n.rebalancer = repair.NewRebalancer(st, n, n.log, cfg.RebalanceRate)
+	return n, nil
+}
+
+func withDefaults(cfg Config) Config {
+	if !cfg.Quorum.Valid() {
+		cfg.Quorum = replica.DefaultQuorum()
+	}
+	if cfg.VNodes <= 0 {
+		cfg.VNodes = ring.DefaultVNodes
+	}
+	if cfg.RPCTimeout <= 0 {
+		cfg.RPCTimeout = defaultRPCTimeout
+	}
+	if cfg.ScrubInterval <= 0 {
+		cfg.ScrubInterval = defaultScrubInterval
+	}
+	return cfg
+}
+
+// restoreState reads back what the last run of this node knew. The
+// persisted policy wins over the flags when it exists: it was set on
+// purpose, by an operator, and a restart must not silently reset the
+// cluster to its defaults. The clock is seeded from every version the
+// index has seen, so a restart never issues an older one.
+func (n *Node) restoreState() {
+	policy := ClusterConfig{Quorum: n.cfg.Quorum, Version: 0, Origin: n.cfg.ID}
+	if raw, ok, _ := n.store.GetMeta(metaPolicy); ok {
 		var saved ClusterConfig
 		if err := json.Unmarshal(raw, &saved); err == nil && saved.Quorum.Validate() == nil {
 			policy = saved
 		}
 	}
 	n.cluster.Store(&policy)
-	if v, err := st.MaxVersion(); err == nil {
+	if v, err := n.store.MaxVersion(); err == nil {
 		n.clock.Observe(v)
 	}
-	if raw, ok, _ := st.GetMeta(metaClock); ok && len(raw) == 8 {
+	if raw, ok, _ := n.store.GetMeta(metaClock); ok && len(raw) == 8 {
 		n.clock.Observe(binary.BigEndian.Uint64(raw))
 	}
-	if stats, err := st.Stats(); err == nil {
+	if stats, err := n.store.Stats(); err == nil {
 		if stats.Swept > 0 {
-			n.log.Emitf(events.KindMembership, events.LevelInfo, "", "%s recovery sweep removed %d orphan file(s) left by an earlier crash", cfg.ID, stats.Swept)
+			n.log.Emitf(events.KindMembership, events.LevelInfo, "", "%s recovery sweep removed %d orphan file(s) left by an earlier crash", n.cfg.ID, stats.Swept)
 		}
 		if stats.IndexErrors > 0 {
-			n.log.Emitf(events.KindMembership, events.LevelWarn, "", "%s index has %d record(s) that no longer decode; they are skipped", cfg.ID, stats.IndexErrors)
+			n.log.Emitf(events.KindMembership, events.LevelWarn, "", "%s index has %d record(s) that no longer decode; they are skipped", n.cfg.ID, stats.IndexErrors)
 		}
 	}
+}
 
-	_, grpcPort, err := splitPort(cfg.GRPCAddr)
-	if err != nil {
-		st.Close()
-		return nil, fmt.Errorf("node: grpc addr: %w", err)
-	}
-	_, httpPort, err := splitPort(cfg.HTTPAddr)
-	if err != nil {
-		st.Close()
-		return nil, fmt.Errorf("node: http addr: %w", err)
-	}
-
+func (n *Node) membershipConfig(grpcPort, httpPort int) membership.Config {
 	var gossipKey []byte
-	if cfg.ClusterSecret != "" {
-		k := sha256.Sum256([]byte("athanor-gossip:" + cfg.ClusterSecret))
+	if n.cfg.ClusterSecret != "" {
+		k := sha256.Sum256([]byte("athanor-gossip:" + n.cfg.ClusterSecret))
 		gossipKey = k[:]
 	}
-	n.mem = membership.New(membership.Config{
-		NodeID:     cfg.ID,
+	return membership.Config{
+		NodeID:     n.cfg.ID,
 		SecretKey:  gossipKey,
-		Bind:       cfg.GossipAddr,
-		Advertise:  cfg.Advertise,
+		Bind:       n.cfg.GossipAddr,
+		Advertise:  n.cfg.Advertise,
 		GRPCPort:   grpcPort,
 		HTTPPort:   httpPort,
-		PublicURL:  cfg.PublicURL,
-		Seeds:      cfg.Seeds,
-		ReapAfter:  cfg.ReapAfter,
-		Fast:       cfg.Fast,
-		Quiet:      cfg.Quiet,
+		PublicURL:  n.cfg.PublicURL,
+		Seeds:      n.cfg.Seeds,
+		ReapAfter:  n.cfg.ReapAfter,
+		Fast:       n.cfg.Fast,
+		Quiet:      n.cfg.Quiet,
 		Log:        n.log,
 		LocalState: n.localState,
 		MergeState: n.mergeState,
 		OnChange:   n.onMembershipChange,
 		OnReturn:   n.onMemberReturn,
-	})
-
-	n.coord = replica.NewCoordinator(n, n.clock, n.log, cfg.RPCTimeout)
-	n.repairer = repair.NewRepairer(n, n.log, cfg.RPCTimeout)
-	n.coord.OnDivergence = func(key, why string) {
-		n.log.Emit(events.KindRepair, events.LevelWarn, key, fmt.Sprintf("read-repair: %s (%s)", key, why), nil)
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_, _ = n.repairer.Repair(ctx, key, repair.ReasonReadRepair)
 	}
-	n.scrubber = repair.NewScrubber(st, n.repairer.Repair, n.log, cfg.ScrubInterval)
-	n.hints = repair.NewHintReplayer(st, n, n.repairer.Repair, n.log)
-	n.rebalancer = repair.NewRebalancer(st, n, n.log, cfg.RebalanceRate)
-	return n, nil
+}
+
+// readRepair is what a divergent read triggers: the same Repair path the
+// scrubber and hint replay use.
+func (n *Node) readRepair(key, why string) {
+	n.log.Emit(events.KindRepair, events.LevelWarn, key, fmt.Sprintf("read-repair: %s (%s)", key, why), nil)
+	ctx, cancel := context.WithTimeout(context.Background(), readRepairTimeout)
+	defer cancel()
+	_, _ = n.repairer.Repair(ctx, key, repair.ReasonReadRepair)
 }
 
 // Start brings up peer RPC, gossip, and the background jobs.

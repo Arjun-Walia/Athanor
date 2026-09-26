@@ -412,11 +412,7 @@ html:has(.ln-root) {
   inset: 0;
   z-index: -1;
   pointer-events: none;
-  background: radial-gradient(
-    38rem 30rem at calc(74% + var(--mx) * 6%) calc(50% + var(--my) * 6%),
-    rgba(246, 207, 69, 0.42),
-    transparent 70%
-  );
+  background: radial-gradient(38rem 30rem at calc(74% + var(--mx) * 6%) calc(50% + var(--my) * 6%), rgba(246, 207, 69, 0.42), transparent 70%);
   transition: background-position 0.2s;
 }
 
@@ -631,7 +627,7 @@ html:has(.ln-root) {
   stroke-linecap: round;
   stroke-dasharray: 100;
   stroke-dashoffset: 100;
-  pathLength: 100;
+  pathlength: 100;
   opacity: 0;
   animation: ln-trail 12s var(--ln-ease) infinite backwards;
   animation-delay: var(--d);

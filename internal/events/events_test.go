@@ -38,3 +38,16 @@ func TestLastByKind(t *testing.T) {
 		t.Fatalf("stats before wrap = %+v", s)
 	}
 }
+
+func BenchmarkSinceFullRing(b *testing.B) {
+	l := New("node1", DefaultCapacity, true)
+	for i := 0; i < DefaultCapacity*2; i++ {
+		l.Emitf(KindWrite, LevelOK, "k", "write %d", i)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if got := l.Since(0, 400); len(got) != 400 {
+			b.Fatalf("got %d", len(got))
+		}
+	}
+}

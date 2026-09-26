@@ -46,11 +46,7 @@
   --suspect: var(--yellow-deep);
   --dead: #d65a3c;
   --dead-soft: #f6d3c6;
-  --hatch: repeating-linear-gradient(
-    -55deg,
-    rgba(29, 29, 27, 0.16) 0 1.5px,
-    transparent 1.5px 9px
-  );
+  --hatch: repeating-linear-gradient(-55deg, rgba(29, 29, 27, 0.16) 0 1.5px, transparent 1.5px 9px);
 
   /* shape */
   --r-xl: 2.25rem;
@@ -58,14 +54,11 @@
   --r-md: 1.25rem;
   --r-sm: 0.875rem;
   --pill: 999px;
-  --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.9) inset,
-    0 24px 48px -28px rgba(74, 62, 24, 0.28);
-  --shadow-float: 0 30px 60px -30px rgba(40, 34, 12, 0.4),
-    0 8px 20px -12px rgba(40, 34, 12, 0.2);
+  --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.9) inset, 0 24px 48px -28px rgba(74, 62, 24, 0.28);
+  --shadow-float: 0 30px 60px -30px rgba(40, 34, 12, 0.4), 0 8px 20px -12px rgba(40, 34, 12, 0.2);
 
   /* type */
-  --font: "Outfit Variable", "Outfit", ui-sans-serif, system-ui, -apple-system,
-    "Segoe UI", sans-serif;
+  --font: "Outfit Variable", "Outfit", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
 
   /* motion */
@@ -196,7 +189,9 @@ a {
   color: var(--ink-2);
   text-decoration: none;
   white-space: nowrap;
-  transition: background 0.25s var(--ease-out), color 0.25s var(--ease-out);
+  transition:
+    background 0.25s var(--ease-out),
+    color 0.25s var(--ease-out);
 }
 
 .pill-btn:hover {
@@ -219,7 +214,9 @@ a {
   background: var(--card-strong);
   box-shadow: var(--shadow-card);
   color: var(--ink);
-  transition: transform 0.25s var(--ease-spring), background 0.2s;
+  transition:
+    transform 0.25s var(--ease-spring),
+    background 0.2s;
 }
 
 .icon-btn:hover:not(:disabled) {
@@ -357,9 +354,7 @@ html.is-desktop .ln-nav-actions {
   width: min(26rem, 100%);
   padding: 1.15rem 1.15rem 1.25rem;
   border-radius: 1.7rem;
-  background:
-    radial-gradient(90% 70% at 100% 0%, rgba(246, 207, 69, 0.55), transparent 58%),
-    #fbfaf6;
+  background: radial-gradient(90% 70% at 100% 0%, rgba(246, 207, 69, 0.55), transparent 58%), #fbfaf6;
   box-shadow: var(--shadow-float);
   color: var(--ink);
 }
@@ -377,9 +372,7 @@ html.is-desktop .ln-nav-actions {
   margin-bottom: 1rem;
   overflow: hidden;
   border-radius: 1.15rem;
-  background:
-    radial-gradient(40% 70% at 62% 70%, rgba(246, 207, 69, 0.95), transparent 70%),
-    linear-gradient(155deg, #e7e7e5 0%, #f4efdf 55%, #f6e6a9 100%);
+  background: radial-gradient(40% 70% at 62% 70%, rgba(246, 207, 69, 0.95), transparent 70%), linear-gradient(155deg, #e7e7e5 0%, #f4efdf 55%, #f6e6a9 100%);
 }
 
 .desk-preview-orb {

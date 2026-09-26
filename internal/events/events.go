@@ -7,8 +7,9 @@
 package events
 
 import (
+	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -99,7 +100,7 @@ func (l *Log) Emit(kind Kind, level Level, key, message string, fields map[strin
 	l.mu.Unlock()
 
 	if !l.quiet {
-		log.Printf("event %s %-10s %-5s %s", l.node, kind, level, message)
+		slog.Log(context.Background(), slogLevel(level), message, "node", l.node, "kind", string(kind), "key", key)
 	}
 	return ev
 }
@@ -109,20 +110,36 @@ func (l *Log) Emitf(kind Kind, level Level, key, format string, args ...any) Eve
 	return l.Emit(kind, level, key, fmt.Sprintf(format, args...), nil)
 }
 
+// slogLevel maps an event level onto the process log's levels.
+func slogLevel(level Level) slog.Level {
+	switch level {
+	case LevelWarn:
+		return slog.LevelWarn
+	case LevelErr:
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
+
 // Since returns events with Seq > since, oldest first, capped at limit
-// (the newest ones win when capped). limit <= 0 means no cap.
+// (the newest ones win when capped). limit <= 0 means no cap. The ring is
+// walked once, oldest to newest, and only matching events are copied.
 func (l *Log) Since(since uint64, limit int) []Event {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	var ordered []Event
+	n := l.next
 	if l.filled {
-		ordered = append(ordered, l.buf[l.next:]...)
+		n = len(l.buf)
 	}
-	ordered = append(ordered, l.buf[:l.next]...)
-
-	out := make([]Event, 0, len(ordered))
-	for _, ev := range ordered {
+	start := 0
+	if l.filled {
+		start = l.next
+	}
+	out := make([]Event, 0, n)
+	for i := 0; i < n; i++ {
+		ev := l.buf[(start+i)%len(l.buf)]
 		if ev.Seq > since {
 			out = append(out, ev)
 		}

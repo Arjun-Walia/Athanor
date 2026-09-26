@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net"
 	"sort"
 	"strconv"
@@ -160,72 +161,19 @@ func (m *Membership) Start() error {
 	}
 	m.mu.Unlock()
 
-	host, portStr, err := net.SplitHostPort(m.cfg.Bind)
-	if err != nil {
-		return fmt.Errorf("membership: gossip bind %q: %w", m.cfg.Bind, err)
-	}
-	port, _ := strconv.Atoi(portStr)
-	if host == "" {
-		host = "0.0.0.0"
-	}
 	logger := log.New(m.logWriter(), "", log.LstdFlags)
-	nt, err := memberlist.NewNetTransport(&memberlist.NetTransportConfig{BindAddrs: []string{host}, BindPort: port, Logger: logger})
+	ft, adv, err := m.openTransport(logger)
 	if err != nil {
-		return fmt.Errorf("membership: listen %s: %w", m.cfg.Bind, err)
+		return err
 	}
-	ft := newFilterTransport(nt, m.isBlocked)
-
-	advIP := ""
-	advHost := m.cfg.Advertise
-	if advHost != "" {
-		ips, err := net.LookupIP(advHost)
-		if err != nil || len(ips) == 0 {
-			_ = ft.Shutdown()
-			return fmt.Errorf("membership: resolve advertise host %q: %v", advHost, err)
-		}
-		advIP = ips[0].String()
-	}
-	ip, advPort, err := ft.FinalAdvertiseAddr(advIP, nt.GetAutoBindPort())
-	if err != nil {
-		_ = ft.Shutdown()
-		return fmt.Errorf("membership: advertise address: %w", err)
-	}
-	if advHost == "" {
-		advHost = ip.String()
-	}
-
-	conf := memberlist.DefaultLANConfig()
-	conf.Name = m.cfg.NodeID
-	conf.Transport = ft
-	if len(m.cfg.SecretKey) > 0 {
-		conf.SecretKey = m.cfg.SecretKey
-	}
-	conf.AdvertiseAddr = ip.String()
-	conf.AdvertisePort = advPort
-	conf.Delegate = &delegate{m: m}
-	conf.Events = &eventDelegate{m: m}
-	conf.Logger = logger
-	conf.DeadNodeReclaimTime = time.Second
-	conf.TCPTimeout = 2 * time.Second
-	conf.ProbeInterval = time.Second
-	conf.ProbeTimeout = 500 * time.Millisecond
-	conf.SuspicionMult = 3
-	conf.GossipInterval = 100 * time.Millisecond
-	conf.PushPullInterval = 10 * time.Second
-	if m.cfg.Fast {
-		conf.ProbeInterval = 250 * time.Millisecond
-		conf.ProbeTimeout = 100 * time.Millisecond
-		conf.GossipInterval = 50 * time.Millisecond
-		conf.PushPullInterval = 2 * time.Second
-		conf.SuspicionMult = 2
-	}
+	conf := m.memberlistConfig(ft, adv, logger)
 
 	m.mu.Lock()
-	m.advHost = advHost
+	m.advHost = adv.host
 	self := m.members[m.cfg.NodeID]
-	self.GossipAddr = net.JoinHostPort(ip.String(), strconv.Itoa(advPort))
-	self.GRPCAddr = net.JoinHostPort(advHost, strconv.Itoa(m.cfg.GRPCPort))
-	self.HTTPAddr = net.JoinHostPort(advHost, strconv.Itoa(m.cfg.HTTPPort))
+	self.GossipAddr = net.JoinHostPort(adv.ip.String(), strconv.Itoa(adv.port))
+	self.GRPCAddr = net.JoinHostPort(adv.host, strconv.Itoa(m.cfg.GRPCPort))
+	self.HTTPAddr = net.JoinHostPort(adv.host, strconv.Itoa(m.cfg.HTTPPort))
 	self.PublicURL = m.cfg.PublicURL
 	self.Status = StatusAlive
 	self.Since = time.Now().UTC()
@@ -264,6 +212,83 @@ func (m *Membership) Start() error {
 	go m.notifyLoop(ml, stop)
 	m.signal()
 	return nil
+}
+
+// advertised is the address other members are told to use for this node.
+type advertised struct {
+	ip   net.IP
+	port int
+	host string // what goes into gRPC and HTTP addresses: the flag, or the IP
+}
+
+// openTransport binds the gossip socket, wraps it in the partition filter,
+// and resolves the address to advertise.
+func (m *Membership) openTransport(logger *log.Logger) (*filterTransport, advertised, error) {
+	host, portStr, err := net.SplitHostPort(m.cfg.Bind)
+	if err != nil {
+		return nil, advertised{}, fmt.Errorf("membership: gossip bind %q: %w", m.cfg.Bind, err)
+	}
+	port, _ := strconv.Atoi(portStr)
+	if host == "" {
+		host = "0.0.0.0"
+	}
+	nt, err := memberlist.NewNetTransport(&memberlist.NetTransportConfig{BindAddrs: []string{host}, BindPort: port, Logger: logger})
+	if err != nil {
+		return nil, advertised{}, fmt.Errorf("membership: listen %s: %w", m.cfg.Bind, err)
+	}
+	ft := newFilterTransport(nt, m.isBlocked)
+
+	advIP := ""
+	if m.cfg.Advertise != "" {
+		ips, err := net.LookupIP(m.cfg.Advertise)
+		if err != nil || len(ips) == 0 {
+			_ = ft.Shutdown()
+			return nil, advertised{}, fmt.Errorf("membership: resolve advertise host %q: %v", m.cfg.Advertise, err)
+		}
+		advIP = ips[0].String()
+	}
+	ip, advPort, err := ft.FinalAdvertiseAddr(advIP, nt.GetAutoBindPort())
+	if err != nil {
+		_ = ft.Shutdown()
+		return nil, advertised{}, fmt.Errorf("membership: advertise address: %w", err)
+	}
+	adv := advertised{ip: ip, port: advPort, host: m.cfg.Advertise}
+	if adv.host == "" {
+		adv.host = ip.String()
+	}
+	return ft, adv, nil
+}
+
+// memberlistConfig is SWIM tuned for a small LAN cluster: one-second
+// probes and a three-probe suspicion window, or a quarter of that in Fast
+// mode for tests.
+func (m *Membership) memberlistConfig(ft *filterTransport, adv advertised, logger *log.Logger) *memberlist.Config {
+	conf := memberlist.DefaultLANConfig()
+	conf.Name = m.cfg.NodeID
+	conf.Transport = ft
+	if len(m.cfg.SecretKey) > 0 {
+		conf.SecretKey = m.cfg.SecretKey
+	}
+	conf.AdvertiseAddr = adv.ip.String()
+	conf.AdvertisePort = adv.port
+	conf.Delegate = &delegate{m: m}
+	conf.Events = &eventDelegate{m: m}
+	conf.Logger = logger
+	conf.DeadNodeReclaimTime = time.Second
+	conf.TCPTimeout = 2 * time.Second
+	conf.ProbeInterval = time.Second
+	conf.ProbeTimeout = 500 * time.Millisecond
+	conf.SuspicionMult = 3
+	conf.GossipInterval = 100 * time.Millisecond
+	conf.PushPullInterval = 10 * time.Second
+	if m.cfg.Fast {
+		conf.ProbeInterval = 250 * time.Millisecond
+		conf.ProbeTimeout = 100 * time.Millisecond
+		conf.GossipInterval = 50 * time.Millisecond
+		conf.PushPullInterval = 2 * time.Second
+		conf.SuspicionMult = 2
+	}
+	return conf
 }
 
 // Isolated reports whether this node currently sees no other live member.
@@ -788,18 +813,25 @@ func (m *Membership) logWriter() io.Writer {
 	if m.cfg.Quiet {
 		return io.Discard
 	}
-	return &levelFilter{out: log.Writer()}
+	return &levelFilter{node: m.cfg.NodeID}
 }
 
-// levelFilter keeps memberlist's warnings and errors and drops its debug
-// chatter.
-type levelFilter struct{ out io.Writer }
+// levelFilter forwards memberlist's warnings and errors to the process log
+// (slog) and drops its debug chatter.
+type levelFilter struct{ node string }
 
 func (f *levelFilter) Write(p []byte) (int, error) {
-	if strings.Contains(string(p), "[DEBUG]") {
-		return len(p), nil
+	line := strings.TrimSpace(string(p))
+	switch {
+	case strings.Contains(line, "[DEBUG]"):
+	case strings.Contains(line, "[ERR]"):
+		slog.Error(line, "node", f.node, "source", "memberlist")
+	case strings.Contains(line, "[WARN]"):
+		slog.Warn(line, "node", f.node, "source", "memberlist")
+	default:
+		slog.Info(line, "node", f.node, "source", "memberlist")
 	}
-	return f.out.Write(p)
+	return len(p), nil
 }
 
 func parseMeta(raw []byte) Meta {

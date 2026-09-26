@@ -17,12 +17,12 @@ func freeAddr(t *testing.T) string {
 			t.Fatal(err)
 		}
 		port := l.Addr().(*net.TCPAddr).Port
-		l.Close()
+		_ = l.Close()
 		u, err := net.ListenPacket("udp", "127.0.0.1:"+strconv.Itoa(port))
 		if err != nil {
 			continue
 		}
-		u.Close()
+		_ = u.Close()
 		return "127.0.0.1:" + strconv.Itoa(port)
 	}
 	t.Fatal("no free port")

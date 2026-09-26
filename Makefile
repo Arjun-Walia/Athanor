@@ -20,9 +20,12 @@ vet:
 lint: vet
 	test -z "$$(gofmt -l .)"
 	go run honnef.co/go/tools/cmd/staticcheck@latest ./...
+	go run github.com/kisielk/errcheck@latest ./...
+	go run github.com/fzipp/gocyclo/cmd/gocyclo@latest -over 20 $$(git ls-files '*.go' | grep -v nodepb)
 	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 ui-lint:
+	npm --prefix ui run format:check
 	npm --prefix ui run lint
 
 ui-test:

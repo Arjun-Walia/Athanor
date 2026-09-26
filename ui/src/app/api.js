@@ -96,14 +96,12 @@ export const api = {
   ready: (base, signal) => request(base, "/v1/admin/ready", { signal, timeout: 2500 }),
   overview: (base, signal) => request(base, "/v1/admin/overview", { signal }),
   events: (base, signal) => request(base, "/v1/admin/events?limit=400", { signal }),
-  ring: (base, key, signal) =>
-    request(base, `/v1/admin/ring${key ? `?key=${encodeURIComponent(key)}` : ""}`, { signal }),
+  ring: (base, key, signal) => request(base, `/v1/admin/ring${key ? `?key=${encodeURIComponent(key)}` : ""}`, { signal }),
   setQuorum: (base, quorum) => request(base, "/v1/admin/config", { method: "PUT", ...json(quorum) }),
   scrub: (base) => request(base, "/v1/admin/scrub", { method: "POST", timeout: 60000 }),
   repair: (base, key) => request(base, `/v1/admin/repair/${keyPath(key)}`, { method: "POST", timeout: 20000 }),
   corrupt: (base, key, node) => request(base, "/v1/admin/corrupt", { method: "POST", ...json({ key, node }) }),
-  nodeAction: (base, id, action) =>
-    request(base, `/v1/admin/nodes/${encodeURIComponent(id)}/${action}`, { method: "POST", timeout: 12000 }),
+  nodeAction: (base, id, action) => request(base, `/v1/admin/nodes/${encodeURIComponent(id)}/${action}`, { method: "POST", timeout: 12000 }),
   partition: (base, a, b) => request(base, "/v1/admin/partitions", { method: "POST", ...json({ a, b }) }),
   heal: (base) => request(base, "/v1/admin/partitions", { method: "DELETE" }),
   put: (base, key, blob) =>

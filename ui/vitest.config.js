@@ -1,11 +1,12 @@
 import { defineConfig } from "vitest/config";
 
-// Unit tests for the pure parts of the UI: formatting, the demo checklist
-// and event grouping, the API helpers, and the break-it model. Nothing
-// here needs a DOM, so the tests run in Node.
+// Unit tests for the UI. Pure logic (formatting, the demo checklist, event
+// grouping, the API helpers, the break-it model) runs in Node; component
+// tests opt into jsdom with a `@vitest-environment jsdom` comment.
 export default defineConfig({
+  esbuild: { jsx: "automatic" },
   test: {
     environment: "node",
-    include: ["src/**/*.test.js"],
+    include: ["src/**/*.test.{js,jsx}"],
   },
 });

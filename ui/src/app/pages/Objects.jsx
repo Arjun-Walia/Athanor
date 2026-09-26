@@ -104,9 +104,7 @@ function WriteReceipt({ result }) {
           </li>
         ))}
       </ul>
-      <p className="ath-muted">
-        Owners: {r.preference.join(" → ")}. The rest finish in the background.
-      </p>
+      <p className="ath-muted">Owners: {r.preference.join(" → ")}. The rest finish in the background.</p>
     </div>
   );
 }
@@ -205,12 +203,7 @@ export default function Objects({ ov, ring, events, actions, now }) {
           value={lastRepair ? ms(Number(lastRepair.fields.micros) / 1000) : "—"}
           note={lastRepair ? `${lastRepair.key} · ${ago(lastRepair.t, now)}` : "None yet"}
         />
-        <Metric
-          icon="ShieldAlert"
-          label="Under-replicated"
-          value={m.under_replicated}
-          note={m.complete ? "Below N verified copies" : "Partial"}
-        />
+        <Metric icon="ShieldAlert" label="Under-replicated" value={m.under_replicated} note={m.complete ? "Below N verified copies" : "Partial"} />
         <Metric icon="Clock" label="Hints parked" value={m.hints} note={m.hints ? "Replayed when the owner returns" : "Every owner is reachable"} />
       </div>
       <div className="ath-objects-layout">
@@ -293,7 +286,13 @@ export default function Objects({ ov, ring, events, actions, now }) {
                           </span>
                         </td>
                         <td className="ath-row-actions">
-                          <button type="button" className="ath-icon-sm" onClick={() => doRead(o.key)} title="Read through the quorum" aria-label={`Read ${o.key}`}>
+                          <button
+                            type="button"
+                            className="ath-icon-sm"
+                            onClick={() => doRead(o.key)}
+                            title="Read through the quorum"
+                            aria-label={`Read ${o.key}`}
+                          >
                             <Icon.Eye size={16} />
                           </button>
                           <Menu label={`Actions for ${o.key}`} buttonClass="ath-icon-sm">

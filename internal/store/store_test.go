@@ -211,7 +211,7 @@ func TestReopenKeepsIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	obj, err := d.Get("k")
 	if err != nil || !bytes.Equal(obj.Body, body) {
 		t.Fatalf("after reopen = %+v, %v", obj, err)
@@ -250,7 +250,7 @@ func TestSweepRemovesOrphansAndKeepsLiveFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	for _, p := range []string{orphanTmp, orphanOld} {
 		if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("orphan %s survived the sweep", p)
@@ -372,7 +372,7 @@ func TestHintCountTracksTheQueue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	if d.HintCount() != 2 {
 		t.Fatalf("count after reopen = %d, want 2", d.HintCount())
 	}
@@ -384,5 +384,56 @@ func TestHintCountTracksTheQueue(t *testing.T) {
 	}
 	if obj, err := d.FindHint("k"); err != nil || obj.Meta.HintedFor != "node3" {
 		t.Fatalf("find = %+v, %v", obj, err)
+	}
+}
+
+func TestCorruptRefusesTombstonesAndUnknownKeys(t *testing.T) {
+	d := open(t)
+	if err := d.Corrupt("missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("corrupt missing = %v", err)
+	}
+	tomb := metaFor("k", 1, "node1", nil)
+	tomb.Deleted = true
+	if _, err := d.Put(tomb, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Corrupt("k"); err == nil {
+		t.Fatal("a tombstone has no bytes to flip")
+	}
+	if _, err := d.GetHint("node2", "k"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("get hint = %v", err)
+	}
+}
+
+func FuzzDecodeMetaNeverPanics(f *testing.F) {
+	body := []byte("seed")
+	raw, _ := encodeMeta(metaFor("k", 9, "node1", body))
+	f.Add(raw)
+	f.Add([]byte(`{"key":"k","version":1,"checksum":"zz"}`))
+	f.Add([]byte(`{`))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		m, err := decodeMeta(data)
+		if err == nil && m.Key == "" {
+			t.Fatalf("decoded a record with no key from %q", data)
+		}
+	})
+}
+
+func BenchmarkPutGet(b *testing.B) {
+	d, err := Open(b.TempDir())
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer func() { _ = d.Close() }()
+	body := bytes.Repeat([]byte("x"), 4096)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		meta := metaFor("bench", uint64(i+1), "node1", body)
+		if _, err := d.Put(meta, body); err != nil {
+			b.Fatal(err)
+		}
+		if _, err := d.Get("bench"); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

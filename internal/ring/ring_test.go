@@ -109,3 +109,35 @@ func TestPositionAndOwners(t *testing.T) {
 		t.Fatal("owners on an empty ring should be nil")
 	}
 }
+
+func FuzzWalkIsAPermutationOfMembers(f *testing.F) {
+	f.Add("report.pdf")
+	f.Add("")
+	f.Add("a/b/c")
+	f.Fuzz(func(t *testing.T, key string) {
+		r := New(five, 16, 1)
+		walk := r.Walk(key)
+		if len(walk) != len(five) {
+			t.Fatalf("walk of %q has %d nodes", key, len(walk))
+		}
+		seen := map[string]bool{}
+		for _, n := range walk {
+			if seen[n] {
+				t.Fatalf("walk of %q repeats %s", key, n)
+			}
+			seen[n] = true
+		}
+	})
+}
+
+func BenchmarkWalk(b *testing.B) {
+	r := New(five, DefaultVNodes, 1)
+	keys := make([]string, 1024)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("obj-%d", i)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r.Walk(keys[i%len(keys)])
+	}
+}

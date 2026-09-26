@@ -92,11 +92,7 @@ export default function Durability({ ov, actions }) {
           <ul className="ath-facts">
             <li className={overlap > 0 ? "is-ok" : "is-warn"}>
               {overlap > 0 ? <Icon.Check size={16} /> : <Icon.Alert size={16} />}
-              <span>
-                {overlap > 0
-                  ? `Reads overlap the last write by ${overlap}.`
-                  : "Reads can miss the newest write."}
-              </span>
+              <span>{overlap > 0 ? `Reads overlap the last write by ${overlap}.` : "Reads can miss the newest write."}</span>
             </li>
             <li>
               <Icon.Upload size={16} />
@@ -112,9 +108,7 @@ export default function Durability({ ov, actions }) {
             </li>
             <li>
               <Icon.Layers size={16} />
-              <span>
-                {n}× on disk.
-              </span>
+              <span>{n}× on disk.</span>
             </li>
             <li>
               <Icon.Shield size={16} />

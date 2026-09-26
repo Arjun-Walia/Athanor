@@ -4,12 +4,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/Arjun-Walia/Athanor/internal/events"
 	"github.com/Arjun-Walia/Athanor/internal/replica"
 	"github.com/Arjun-Walia/Athanor/internal/store"
+)
+
+// Timeouts for the background jobs' peer calls. A peer inventory is a list
+// of metadata; a copy carries a whole object and gets longer.
+const (
+	inventoryTimeout = 3 * time.Second
+	copyTimeout      = 5 * time.Second
 )
 
 // RepairFunc is the single repair entry point the background jobs call.
@@ -213,7 +221,7 @@ func (h *HintReplayer) ReplayOnce(ctx context.Context) int {
 		}
 		key, target := hint.Meta.Key, hint.Target
 		pref, _ := replica.Preference(h.view, key, h.view.Quorum().N)
-		owner := contains(pref, target)
+		owner := slices.Contains(pref, target)
 		if owner && !h.view.Reachable(target) {
 			continue
 		}
@@ -221,7 +229,7 @@ func (h *HintReplayer) ReplayOnce(ctx context.Context) int {
 			continue
 		}
 		if owner {
-			rctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			rctx, cancel := context.WithTimeout(ctx, inventoryTimeout)
 			rep, err := h.view.Peer(target).GetReplica(rctx, key, false)
 			cancel()
 			if err != nil || !rep.Found || rep.Hinted || rep.Corrupt || !store.AtLeast(rep.Meta, hint.Meta) {
@@ -340,15 +348,41 @@ func (b *Rebalancer) RunOnce(ctx context.Context, why string) RebalanceSummary {
 	if err != nil || len(local) == 0 {
 		return sum
 	}
-	self := b.view.Self()
-	q := b.view.Quorum()
+	inventories := b.peerInventories(ctx)
+	emit := b.boundedEmitter(maxRebalanceLines)
+	for _, meta := range local {
+		if ctx.Err() != nil {
+			break
+		}
+		sum.Checked++
+		copied, dropped, stopped := b.rebalanceKey(ctx, meta, inventories, emit)
+		sum.Copied += copied
+		sum.Dropped += dropped
+		if stopped {
+			return sum
+		}
+	}
+	if sum.Copied > 0 || sum.Dropped > 0 {
+		b.log.Emit(events.KindRebalance, events.LevelOK, "",
+			fmt.Sprintf("rebalance on %s (%s): %d checked, %d copied, %d dropped", b.view.Self(), why, sum.Checked, sum.Copied, sum.Dropped), nil)
+	}
+	return sum
+}
 
-	inventories := map[string]map[string]store.ObjectMeta{}
+// maxRebalanceLines caps the per-key log lines of one pass so a big join
+// does not flood the event log; the summary line always follows.
+const maxRebalanceLines = 25
+
+// peerInventories asks every reachable peer what it holds, keyed by node
+// and then by object key.
+func (b *Rebalancer) peerInventories(ctx context.Context) map[string]map[string]store.ObjectMeta {
+	self := b.view.Self()
+	out := map[string]map[string]store.ObjectMeta{}
 	for _, n := range b.view.Members() {
 		if n == self || !b.view.Reachable(n) {
 			continue
 		}
-		rctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		rctx, cancel := context.WithTimeout(ctx, inventoryTimeout)
 		inv, err := b.view.Peer(n).Inventory(rctx)
 		cancel()
 		if err != nil {
@@ -358,81 +392,76 @@ func (b *Rebalancer) RunOnce(ctx context.Context, why string) RebalanceSummary {
 		for _, m := range inv.Objects {
 			idx[m.Key] = m
 		}
-		inventories[n] = idx
+		out[n] = idx
 	}
+	return out
+}
 
-	const maxLines = 25
+func (b *Rebalancer) boundedEmitter(limit int) func(events.Level, string, string) {
 	lines := 0
-	emit := func(level events.Level, key, msg string) {
-		if lines < maxLines {
+	return func(level events.Level, key, msg string) {
+		if lines < limit {
 			b.log.Emit(events.KindRebalance, level, key, msg, nil)
 		}
 		lines++
 	}
+}
 
-	for _, meta := range local {
-		if ctx.Err() != nil {
-			break
+// rebalanceKey makes sure every reachable owner of one local replica holds
+// it, copying where needed, and drops the local copy once this node is not
+// an owner and every owner is confirmed. stopped is true when the token
+// bucket wait was cancelled and the pass should end.
+func (b *Rebalancer) rebalanceKey(ctx context.Context, meta store.ObjectMeta, inventories map[string]map[string]store.ObjectMeta, emit func(events.Level, string, string)) (copied, dropped int, stopped bool) {
+	self := b.view.Self()
+	pref, _ := replica.Preference(b.view, meta.Key, b.view.Quorum().N)
+	owner := slices.Contains(pref, self)
+	allHold := len(pref) > 0
+	var obj *store.Object
+	for _, p := range pref {
+		if p == self {
+			continue
 		}
-		sum.Checked++
-		pref, _ := replica.Preference(b.view, meta.Key, q.N)
-		owner := contains(pref, self)
-		allHold := len(pref) > 0
-		var obj *store.Object
-		for _, p := range pref {
-			if p == self {
-				continue
-			}
-			if !b.view.Reachable(p) {
-				allHold = false
-				continue
-			}
-			idx, ok := inventories[p]
-			if !ok {
-				allHold = false
-				continue
-			}
-			if theirs, has := idx[meta.Key]; has && store.AtLeast(theirs, meta) {
-				continue
-			}
-			if obj == nil {
-				o, err := b.store.Get(meta.Key)
-				if err != nil || o.Corrupt {
-					// Never spread bad bytes. The scrubber will repair this copy.
-					allHold = false
-					break
-				}
-				obj = &o
-			}
-			if err := b.limiter.Wait(ctx); err != nil {
-				return sum
-			}
-			rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			_, err := b.view.Peer(p).Replicate(rctx, obj.Meta, obj.Body, "rebalance")
-			cancel()
-			if err != nil {
-				allHold = false
-				continue
-			}
-			sum.Copied++
-			if owner {
-				emit(events.LevelInfo, meta.Key, fmt.Sprintf("rebalance: copied %s from %s to %s (new owner)", meta.Key, self, p))
-			} else {
-				emit(events.LevelInfo, meta.Key, fmt.Sprintf("rebalance: migrate %s from %s → %s", meta.Key, self, p))
-			}
+		idx, ok := inventories[p]
+		if !b.view.Reachable(p) || !ok {
+			allHold = false
+			continue
 		}
-		if !owner && allHold {
-			if dropped, err := b.store.DeleteIf(meta); err == nil && dropped {
-				sum.Dropped++
-				emit(events.LevelInfo, meta.Key, fmt.Sprintf("rebalance: dropped %s from %s; owners are now %v", meta.Key, self, pref))
+		if theirs, has := idx[meta.Key]; has && store.AtLeast(theirs, meta) {
+			continue
+		}
+		if obj == nil {
+			o, err := b.store.Get(meta.Key)
+			if err != nil || o.Corrupt {
+				// Never spread bad bytes. The scrubber will repair this copy.
+				allHold = false
+				break
 			}
+			obj = &o
+		}
+		if err := b.limiter.Wait(ctx); err != nil {
+			return copied, dropped, true
+		}
+		rctx, cancel := context.WithTimeout(ctx, copyTimeout)
+		_, err := b.view.Peer(p).Replicate(rctx, obj.Meta, obj.Body, "rebalance")
+		cancel()
+		if err != nil {
+			allHold = false
+			continue
+		}
+		copied++
+		if owner {
+			emit(events.LevelInfo, meta.Key, fmt.Sprintf("rebalance: copied %s from %s to %s (new owner)", meta.Key, self, p))
+		} else {
+			emit(events.LevelInfo, meta.Key, fmt.Sprintf("rebalance: migrate %s from %s → %s", meta.Key, self, p))
 		}
 	}
-	if sum.Copied > 0 || sum.Dropped > 0 {
-		b.log.Emit(events.KindRebalance, events.LevelOK, "",
-			fmt.Sprintf("rebalance on %s (%s): %d checked, %d copied, %d dropped", self, why, sum.Checked, sum.Copied, sum.Dropped), nil)
+	if !owner && allHold {
+		if ok, err := b.store.DeleteIf(meta); err == nil && ok {
+			dropped++
+			emit(events.LevelInfo, meta.Key, fmt.Sprintf("rebalance: dropped %s from %s; owners are now %v", meta.Key, self, pref))
+		}
 	}
-	return sum
+	return copied, dropped, false
 }
 
 // TokenBucket bounds background copy work so repair and rebalance never
@@ -478,13 +507,4 @@ func (t *TokenBucket) Wait(ctx context.Context) error {
 		case <-timer.C:
 		}
 	}
-}
-
-func contains(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }

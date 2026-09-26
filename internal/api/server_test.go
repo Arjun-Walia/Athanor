@@ -2,6 +2,7 @@ package api
 
 import (
 	"bufio"
+	"compress/gzip"
 	"encoding/json"
 	"io"
 	"net"
@@ -22,7 +23,7 @@ func port(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 	return strconv.Itoa(l.Addr().(*net.TCPAddr).Port)
 }
 
@@ -63,7 +64,7 @@ func do(t *testing.T, method, url, body string) (*http.Response, []byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(resp.Body)
 	return resp, raw
 }
@@ -275,7 +276,7 @@ func TestEventStreamPushesNewLines(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
 		t.Fatalf("content type = %q", ct)
 	}
@@ -351,7 +352,7 @@ func TestAdminTokenGatesMutations(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		raw, _ := io.ReadAll(resp.Body)
 		return resp, raw
 	}
@@ -387,5 +388,123 @@ func TestAdminTokenGatesMutations(t *testing.T) {
 	}
 	if resp, _ := withAuth(http.MethodOptions, "/v1/objects/x", "", ""); resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("preflight must stay open: %d", resp.StatusCode)
+	}
+}
+
+func TestRootRingEventsAndValidation(t *testing.T) {
+	_, srv := single(t)
+	resp, raw := do(t, http.MethodGet, srv.URL+"/v1/", "")
+	if resp.StatusCode != http.StatusOK || decode(t, raw)["name"] != "athanor" {
+		t.Fatalf("root = %d %s", resp.StatusCode, raw)
+	}
+	do(t, http.MethodPut, srv.URL+"/v1/objects/where", "x")
+	resp, raw = do(t, http.MethodGet, srv.URL+"/v1/admin/ring?key=where", "")
+	body := decode(t, raw)
+	if resp.StatusCode != http.StatusOK || body["placement"] == nil {
+		t.Fatalf("ring = %d %s", resp.StatusCode, raw)
+	}
+	placement := body["placement"].(map[string]any)
+	if placement["key"] != "where" || len(placement["preference"].([]any)) != 1 {
+		t.Fatalf("placement = %v", placement)
+	}
+	resp, raw = do(t, http.MethodGet, srv.URL+"/v1/admin/events?limit=5", "")
+	if resp.StatusCode != http.StatusOK || len(decode(t, raw)["events"].([]any)) == 0 {
+		t.Fatalf("events = %d %s", resp.StatusCode, raw)
+	}
+	// Keys must be 1-1024 bytes with no NUL.
+	resp, _ = do(t, http.MethodPut, srv.URL+"/v1/objects/"+strings.Repeat("k", 1025), "x")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("long key = %d", resp.StatusCode)
+	}
+	resp, _ = do(t, http.MethodGet, srv.URL+"/v1/objects/never-written", "")
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("missing key = %d", resp.StatusCode)
+	}
+}
+
+func TestAdminBodiesAreValidated(t *testing.T) {
+	_, srv := single(t)
+	resp, _ := do(t, http.MethodPost, srv.URL+"/v1/admin/corrupt", `{"node":"node1"}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("corrupt without key = %d", resp.StatusCode)
+	}
+	resp, _ = do(t, http.MethodPost, srv.URL+"/v1/admin/corrupt", `{"key":"nope","node":"node1"}`)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("corrupt unknown key = %d", resp.StatusCode)
+	}
+	resp, _ = do(t, http.MethodPost, srv.URL+"/v1/admin/partitions", `{"a":"node1","b":"node1"}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("partition with itself = %d", resp.StatusCode)
+	}
+	resp, _ = do(t, http.MethodPost, srv.URL+"/v1/admin/nodes/node1/reboot", "")
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown action = %d", resp.StatusCode)
+	}
+	resp, _ = do(t, http.MethodPost, srv.URL+"/v1/admin/nodes/ghost/stop", "")
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown node = %d", resp.StatusCode)
+	}
+	resp, _ = do(t, http.MethodPut, srv.URL+"/v1/admin/config", `not json`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("bad config body = %d", resp.StatusCode)
+	}
+	resp, raw := do(t, http.MethodDelete, srv.URL+"/v1/admin/partitions", "")
+	if resp.StatusCode != http.StatusOK || decode(t, raw)["healed"] != true {
+		t.Fatalf("heal = %d %s", resp.StatusCode, raw)
+	}
+}
+
+func TestUploadCapAndGzip(t *testing.T) {
+	n, err := node.New(node.Config{
+		ID: "node1", DataDir: t.TempDir(),
+		HTTPAddr: "127.0.0.1:" + port(t), GRPCAddr: "127.0.0.1:" + port(t), GossipAddr: "127.0.0.1:" + port(t),
+		Quorum: replica.Quorum{N: 1, W: 1, R: 1}, Fast: true, Quiet: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Start(); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(NewServer(n, Options{MaxUpload: 16}).Handler())
+	t.Cleanup(func() {
+		srv.Close()
+		_ = n.Close()
+	})
+	resp, _ := do(t, http.MethodPut, srv.URL+"/v1/objects/big", strings.Repeat("x", 17))
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized upload = %d", resp.StatusCode)
+	}
+	for i := 0; i < 40; i++ {
+		do(t, http.MethodPut, srv.URL+"/v1/objects/k"+strconv.Itoa(i), "0123456789")
+	}
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/v1/admin/overview", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	gz, err := (&http.Client{Transport: &http.Transport{DisableCompression: true}}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = gz.Body.Close() }()
+	if gz.Header.Get("Content-Encoding") != "gzip" {
+		t.Fatalf("large overview not compressed: %v", gz.Header)
+	}
+	zr, err := gzip.NewReader(gz.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ov node.Overview
+	if err := json.NewDecoder(zr).Decode(&ov); err != nil || len(ov.Objects) != 40 {
+		t.Fatalf("decoded overview = %d objects, %v", len(ov.Objects), err)
+	}
+	// Small answers and object bodies are left alone.
+	req, _ = http.NewRequest(http.MethodGet, srv.URL+"/v1/objects/k1", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	plain, err := (&http.Client{Transport: &http.Transport{DisableCompression: true}}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = plain.Body.Close() }()
+	if plain.Header.Get("Content-Encoding") != "" {
+		t.Fatal("object body was compressed")
 	}
 }

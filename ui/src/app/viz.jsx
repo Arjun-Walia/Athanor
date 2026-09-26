@@ -1,7 +1,7 @@
 // The dashboard's drawings: the live hash ring, the scrub dial, the replica
 // bars, and the activity timeline. All SVG or plain DOM; no chart library.
 
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { inkOn, nodeTone, statusMeta } from "./components.jsx";
 import { chipLabel, eventColumn, groupEvents, notable } from "./story.js";
 import { clock, nodeShort } from "./format.js";
@@ -26,16 +26,48 @@ function arcPath(cx, cy, r, from, to) {
  * is one vnode. With a placement, the key's position is marked and the
  * clockwise walk to its preference list is traced.
  */
-export function HashRing({ ring, nodes, placement, size = 420 }) {
+export const HashRing = memo(function HashRing({ ring, nodes, placement, size = 420 }) {
   const cx = 200;
   const cy = 200;
   const r = 148;
   const ids = ring?.nodes ?? [];
-  const statusOf = useMemo(() => {
-    const m = new Map();
-    for (const n of nodes ?? []) m.set(n.id, n.status);
-    return m;
-  }, [nodes]);
+  // A status string per node, so the ticks only re-render when a status
+  // changes, not on every poll that returns the same picture.
+  const statusKey = useMemo(
+    () =>
+      (nodes ?? [])
+        .map((n) => `${n.id}:${n.status}`)
+        .sort()
+        .join(","),
+    [nodes],
+  );
+
+  const ticks = useMemo(() => {
+    if (!ring?.tokens) return null;
+    const statusOf = new Map(statusKey.split(",").map((pair) => pair.split(":")));
+    return ring.tokens.map((t, i) => {
+      const [x1, y1] = polar(cx, cy, r - 11, t.pos);
+      const [x2, y2] = polar(cx, cy, r + 11, t.pos);
+      const st = statusOf.get(t.node) || "unknown";
+      const down = st === "dead" || st === "stopped" || st === "unknown";
+      return (
+        <line
+          key={i}
+          x1={x1}
+          y1={y1}
+          x2={x2}
+          y2={y2}
+          stroke={nodeTone(t.node, ids)}
+          strokeWidth={down ? 1.4 : 2.2}
+          strokeOpacity={down ? 0.28 : 0.9}
+          strokeDasharray={down ? "2 2" : undefined}
+          strokeLinecap="round"
+        />
+      );
+    });
+    // ids derives from ring; statusKey is the only other input
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ring, statusKey]);
 
   const walk = useMemo(() => {
     if (!placement || !ring?.tokens?.length) return null;
@@ -57,7 +89,13 @@ export function HashRing({ ring, nodes, placement, size = 420 }) {
   }
 
   return (
-    <svg className="ath-ring" viewBox="-40 -40 480 480" width={size} role="img" aria-label={`Hash ring version ${ring.version} with ${ids.length} nodes and ${ring.tokens.length} virtual nodes`}>
+    <svg
+      className="ath-ring"
+      viewBox="-40 -40 480 480"
+      width={size}
+      role="img"
+      aria-label={`Hash ring version ${ring.version} with ${ids.length} nodes and ${ring.tokens.length} virtual nodes`}
+    >
       <defs>
         <radialGradient id="ringGlow" cx="50%" cy="50%" r="50%">
           <stop offset="0%" stopColor="#f6cf45" stopOpacity="0.35" />
@@ -66,26 +104,7 @@ export function HashRing({ ring, nodes, placement, size = 420 }) {
       </defs>
       <circle cx={cx} cy={cy} r={r + 28} fill="url(#ringGlow)" />
       <circle cx={cx} cy={cy} r={r} className="ath-ring-track" />
-      {ring.tokens.map((t, i) => {
-        const [x1, y1] = polar(cx, cy, r - 11, t.pos);
-        const [x2, y2] = polar(cx, cy, r + 11, t.pos);
-        const st = statusOf.get(t.node) || "unknown";
-        const down = st === "dead" || st === "stopped" || st === "unknown";
-        return (
-          <line
-            key={i}
-            x1={x1}
-            y1={y1}
-            x2={x2}
-            y2={y2}
-            stroke={nodeTone(t.node, ids)}
-            strokeWidth={down ? 1.4 : 2.2}
-            strokeOpacity={down ? 0.28 : 0.9}
-            strokeDasharray={down ? "2 2" : undefined}
-            strokeLinecap="round"
-          />
-        );
-      })}
+      {ticks}
       {walk ? (
         <g className="ath-ring-walk">
           <path d={arcPath(cx, cy, r + 22, placement.pos, walk.end)} className="ath-ring-walk-arc" />
@@ -122,7 +141,7 @@ export function HashRing({ ring, nodes, placement, size = 420 }) {
       </text>
     </svg>
   );
-}
+});
 
 /** Countdown dial: yellow arc for time elapsed, ticks for time remaining. */
 export function Dial({ fraction, label, sub, busy }) {
@@ -208,8 +227,7 @@ export function Timeline({ events, nodes, windowMs, now }) {
     const chipW = Math.min(100, colW * 1.9);
     const GAP = 0.35;
     const maxTop = HEIGHT - CHIP_H;
-    const hits = (left, top) =>
-      placed.filter((p) => left < p.left + p.w && p.left < left + chipW && top < p.top + CHIP_H + GAP && p.top < top + CHIP_H + GAP);
+    const hits = (left, top) => placed.filter((p) => left < p.left + p.w && p.left < left + chipW && top < p.top + CHIP_H + GAP && p.top < top + CHIP_H + GAP);
     for (const e of latest) {
       const col = Math.max(0, cols.indexOf(eventColumn(e)));
       let left = col * colW + colW * 0.08;

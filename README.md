@@ -128,10 +128,10 @@ Always on: checksums on every read, bounded uploads and in-flight bodies, HTTP t
 ## Tests and checks
 
 ```bash
-make check     # gofmt, vet, staticcheck, govulncheck, go test -race, eslint, vitest
+make check     # gofmt, vet, staticcheck, errcheck, gocyclo, govulncheck, go test -race, prettier, eslint, vitest
 ```
 
-Go tests cover every package; `internal/node` starts real nodes in one process (memberlist gossip and gRPC on loopback) and checks replication across nodes, hinted handoff and replay, healing through scrub and read-repair, gossiped policy changes, partial partitions, restart persistence, and that a node with the wrong secret is kept out. The UI has Vitest unit tests for its pure logic and ESLint with the accessibility rules; both surfaces pass an axe-core WCAG 2.1 AA audit with zero violations.
+Go tests cover every package; `internal/node` starts real nodes in one process (memberlist gossip and gRPC on loopback) and checks replication across nodes, hinted handoff and replay, healing through scrub and read-repair, gossiped policy changes, partial partitions, restart persistence, and that a node with the wrong secret is kept out. The UI has Vitest unit tests for its pure logic and for the components that carry interaction rules (the keyboard-operable menu, status badges, toasts), Prettier for one formatting style, and ESLint with the accessibility rules; both surfaces pass an axe-core WCAG 2.1 AA audit with zero violations. No Go function exceeds a cyclomatic complexity of 20, and every returned error is handled or explicitly discarded.
 
 ### Requirement → proof
 

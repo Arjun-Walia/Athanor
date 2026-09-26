@@ -15,7 +15,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -37,90 +37,139 @@ var version = "dev"
 
 var validID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`)
 
-func main() {
-	def := replica.DefaultQuorum()
-	id := flag.String("id", "node1", "node id (letters, digits, . _ -)")
-	httpAddr := flag.String("http", ":8080", "client and admin HTTP listen address")
-	grpcAddr := flag.String("grpc", ":9090", "peer gRPC listen address")
-	gossipAddr := flag.String("gossip", "0.0.0.0:7946", "memberlist (SWIM) bind address")
-	advertise := flag.String("advertise", "", "host other nodes use to reach this one (default: the gossip IP)")
-	publicURL := flag.String("public-url", "", "browser-facing URL of this node's HTTP API (default: http://localhost:<http port>)")
-	dataDir := flag.String("data", "./data", "local blob and index directory")
-	seeds := flag.String("seeds", "", "comma-separated gossip seeds, host or host:port (port defaults to 7946)")
-	n := flag.Int("n", def.N, "replicas per object (N); a persisted cluster policy overrides this")
-	w := flag.Int("w", def.W, "write acks before success (W)")
-	r := flag.Int("r", def.R, "replicas read before answering (R)")
-	vnodes := flag.Int("vnodes", ring.DefaultVNodes, "virtual nodes per physical node")
-	scrub := flag.Duration("scrub-interval", 30*time.Second, "how often every local checksum is re-verified")
-	reap := flag.Duration("reap-after", 2*time.Minute, "how long a dead node stays in the ring before its keys are re-replicated")
-	rate := flag.Float64("rebalance-rate", 20, "rebalance copies per second")
-	maxUpload := flag.Int64("max-upload-mib", api.DefaultMaxUpload>>20, "largest object accepted, in MiB")
-	maxInflight := flag.Int("max-inflight", api.DefaultMaxInflight, "object bodies held in memory at once; more get 503 + Retry-After")
-	shutdown := flag.Duration("shutdown-timeout", 10*time.Second, "how long to drain HTTP on SIGTERM before exiting")
-	serveUI := flag.Bool("ui", true, "serve the embedded dashboard at / and /app when the binary was built with it")
-	adminToken := flag.String("admin-token", "", "bearer token required for writes and admin actions (empty: open, for local demos)")
-	clusterSecret := flag.String("cluster-secret", "", "shared secret that encrypts gossip and authenticates peer RPC (empty: open)")
-	tlsCert := flag.String("tls-cert", "", "serve HTTPS with this certificate (PEM); needs --tls-key")
-	tlsKey := flag.String("tls-key", "", "private key (PEM) for --tls-cert")
-	showVersion := flag.Bool("version", false, "print the version and exit")
-	applyEnv()
-	flag.Parse()
+// settings is everything the flags and ATHANOR_* environment decide.
+type settings struct {
+	id, httpAddr, grpcAddr, gossipAddr, advertise, publicURL, dataDir, seeds string
+	quorum                                                                   replica.Quorum
+	vnodes                                                                   int
+	scrub, reap, shutdown                                                    time.Duration
+	rate                                                                     float64
+	maxUploadMiB                                                             int64
+	maxInflight                                                              int
+	serveUI, showVersion                                                     bool
+	adminToken, clusterSecret, tlsCert, tlsKey                               string
+}
 
-	if *showVersion {
+func parseFlags(args []string) (settings, error) {
+	def := replica.DefaultQuorum()
+	var s settings
+	fs := flag.NewFlagSet("vault-node", flag.ContinueOnError)
+	fs.StringVar(&s.id, "id", "node1", "node id (letters, digits, . _ -)")
+	fs.StringVar(&s.httpAddr, "http", ":8080", "client and admin HTTP listen address")
+	fs.StringVar(&s.grpcAddr, "grpc", ":9090", "peer gRPC listen address")
+	fs.StringVar(&s.gossipAddr, "gossip", "0.0.0.0:7946", "memberlist (SWIM) bind address")
+	fs.StringVar(&s.advertise, "advertise", "", "host other nodes use to reach this one (default: the gossip IP)")
+	fs.StringVar(&s.publicURL, "public-url", "", "browser-facing URL of this node's HTTP API (default: http://localhost:<http port>)")
+	fs.StringVar(&s.dataDir, "data", "./data", "local blob and index directory")
+	fs.StringVar(&s.seeds, "seeds", "", "comma-separated gossip seeds, host or host:port (port defaults to 7946)")
+	fs.IntVar(&s.quorum.N, "n", def.N, "replicas per object (N); a persisted cluster policy overrides this")
+	fs.IntVar(&s.quorum.W, "w", def.W, "write acks before success (W)")
+	fs.IntVar(&s.quorum.R, "r", def.R, "replicas read before answering (R)")
+	fs.IntVar(&s.vnodes, "vnodes", ring.DefaultVNodes, "virtual nodes per physical node")
+	fs.DurationVar(&s.scrub, "scrub-interval", 30*time.Second, "how often every local checksum is re-verified")
+	fs.DurationVar(&s.reap, "reap-after", 2*time.Minute, "how long a dead node stays in the ring before its keys are re-replicated")
+	fs.Float64Var(&s.rate, "rebalance-rate", 20, "rebalance copies per second")
+	fs.Int64Var(&s.maxUploadMiB, "max-upload-mib", api.DefaultMaxUpload>>20, "largest object accepted, in MiB")
+	fs.IntVar(&s.maxInflight, "max-inflight", api.DefaultMaxInflight, "object bodies held in memory at once; more get 503 + Retry-After")
+	fs.DurationVar(&s.shutdown, "shutdown-timeout", 10*time.Second, "how long to drain HTTP on SIGTERM before exiting")
+	fs.BoolVar(&s.serveUI, "ui", true, "serve the embedded dashboard at / and /app when the binary was built with it")
+	fs.StringVar(&s.adminToken, "admin-token", "", "bearer token required for writes and admin actions (empty: open, for local demos)")
+	fs.StringVar(&s.clusterSecret, "cluster-secret", "", "shared secret that encrypts gossip and authenticates peer RPC (empty: open)")
+	fs.StringVar(&s.tlsCert, "tls-cert", "", "serve HTTPS with this certificate (PEM); needs --tls-key")
+	fs.StringVar(&s.tlsKey, "tls-key", "", "private key (PEM) for --tls-cert")
+	fs.BoolVar(&s.showVersion, "version", false, "print the version and exit")
+	if err := applyEnv(fs, os.LookupEnv); err != nil {
+		return s, err
+	}
+	if err := fs.Parse(args); err != nil {
+		return s, err
+	}
+	return s, s.validate()
+}
+
+func (s *settings) validate() error {
+	if !validID.MatchString(s.id) {
+		return fmt.Errorf("invalid --id %q", s.id)
+	}
+	if err := s.quorum.Validate(); err != nil {
+		return fmt.Errorf("invalid quorum: %w", err)
+	}
+	if (s.tlsCert == "") != (s.tlsKey == "") {
+		return errors.New("--tls-cert and --tls-key go together")
+	}
+	if s.publicURL == "" {
+		if _, port, err := net.SplitHostPort(s.httpAddr); err == nil {
+			scheme := "http"
+			if s.tlsCert != "" {
+				scheme = "https"
+			}
+			s.publicURL = scheme + "://localhost:" + port
+		}
+	}
+	return nil
+}
+
+// isLocal reports whether a public URL points at this machine only.
+func isLocal(publicURL string) bool {
+	return strings.Contains(publicURL, "localhost") || strings.Contains(publicURL, "127.0.0.1")
+}
+
+func main() {
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	s, err := parseFlags(os.Args[1:])
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return
+		}
+		fatal("bad configuration", "err", err)
+	}
+	if s.showVersion {
 		fmt.Println("vault-node", version)
 		return
 	}
-	if !validID.MatchString(*id) {
-		log.Fatalf("invalid --id %q", *id)
+	if err := run(s); err != nil {
+		fatal("vault-node stopped", "err", err)
 	}
-	q := replica.Quorum{N: *n, W: *w, R: *r}
-	if err := q.Validate(); err != nil {
-		log.Fatalf("invalid quorum: %v", err)
-	}
-	if err := os.MkdirAll(*dataDir, 0o755); err != nil {
-		log.Fatalf("data dir: %v", err)
-	}
-	if (*tlsCert == "") != (*tlsKey == "") {
-		log.Fatal("--tls-cert and --tls-key go together")
-	}
-	if *publicURL == "" {
-		if _, port, err := net.SplitHostPort(*httpAddr); err == nil {
-			scheme := "http"
-			if *tlsCert != "" {
-				scheme = "https"
-			}
-			*publicURL = scheme + "://localhost:" + port
-		}
-	}
+}
 
+func fatal(msg string, args ...any) {
+	slog.Error(msg, args...)
+	os.Exit(1)
+}
+
+// run starts one node and blocks until SIGINT or SIGTERM.
+func run(s settings) error {
+	if err := os.MkdirAll(s.dataDir, 0o755); err != nil {
+		return fmt.Errorf("data dir: %w", err)
+	}
 	nd, err := node.New(node.Config{
-		ID:            *id,
-		DataDir:       *dataDir,
-		HTTPAddr:      *httpAddr,
-		GRPCAddr:      *grpcAddr,
-		GossipAddr:    *gossipAddr,
-		Advertise:     *advertise,
-		PublicURL:     *publicURL,
-		Seeds:         seedList(*seeds),
-		Quorum:        q,
-		VNodes:        *vnodes,
-		ScrubInterval: *scrub,
-		ReapAfter:     *reap,
-		RebalanceRate: *rate,
-		ClusterSecret: *clusterSecret,
+		ID:            s.id,
+		DataDir:       s.dataDir,
+		HTTPAddr:      s.httpAddr,
+		GRPCAddr:      s.grpcAddr,
+		GossipAddr:    s.gossipAddr,
+		Advertise:     s.advertise,
+		PublicURL:     s.publicURL,
+		Seeds:         seedList(s.seeds),
+		Quorum:        s.quorum,
+		VNodes:        s.vnodes,
+		ScrubInterval: s.scrub,
+		ReapAfter:     s.reap,
+		RebalanceRate: s.rate,
+		ClusterSecret: s.clusterSecret,
 	})
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
-	opts := api.Options{MaxUpload: *maxUpload << 20, MaxInflight: *maxInflight, Version: version, AdminToken: *adminToken}
-	if *serveUI {
+	opts := api.Options{MaxUpload: s.maxUploadMiB << 20, MaxInflight: s.maxInflight, Version: version, AdminToken: s.adminToken}
+	if s.serveUI {
 		if h, ok := webui.Handler(); ok {
 			opts.UI = h
 		}
 	}
 	server := &http.Server{
-		Addr:    *httpAddr,
+		Addr:    s.httpAddr,
 		Handler: api.NewServer(nd, opts).Handler(),
 		// Slowloris protection on headers; generous bodies for 64 MiB
 		// uploads and downloads over slow links; idle keep-alives reaped.
@@ -133,55 +182,73 @@ func main() {
 
 	// Bind before joining so a port clash is reported before the node has
 	// announced itself to the cluster.
-	lis, err := net.Listen("tcp", *httpAddr)
+	lis, err := net.Listen("tcp", s.httpAddr)
 	if err != nil {
-		log.Fatalf("http listen %s: %v", *httpAddr, err)
+		return fmt.Errorf("http listen %s: %w", s.httpAddr, err)
 	}
 	if err := nd.Start(); err != nil {
-		log.Fatal(err)
+		return err
 	}
-	log.Printf("vault-node %s id=%s http=%s grpc=%s gossip=%s data=%s quorum=%s ui=%v admin-auth=%v secured=%v tls=%v",
-		version, *id, *httpAddr, *grpcAddr, *gossipAddr, *dataDir, nd.Quorum(), opts.UI != nil, *adminToken != "", *clusterSecret != "", *tlsCert != "")
-	if *adminToken == "" && !strings.Contains(*publicURL, "localhost") && !strings.Contains(*publicURL, "127.0.0.1") {
-		log.Printf("warning: %s is reachable without an admin token; anyone can stop nodes and flip bytes (set --admin-token)", *publicURL)
+	slog.Info("vault-node started",
+		"version", version, "id", s.id, "http", s.httpAddr, "grpc", s.grpcAddr, "gossip", s.gossipAddr,
+		"data", s.dataDir, "quorum", nd.Quorum().String(), "ui", opts.UI != nil,
+		"admin_auth", s.adminToken != "", "secured", s.clusterSecret != "", "tls", s.tlsCert != "")
+	if s.adminToken == "" && !isLocal(s.publicURL) {
+		slog.Warn("reachable without an admin token; anyone can stop nodes and flip bytes (set --admin-token)", "public_url", s.publicURL)
 	}
 
+	serveErr := make(chan error, 1)
 	go func() {
 		var err error
-		if *tlsCert != "" {
-			err = server.ServeTLS(lis, *tlsCert, *tlsKey)
+		if s.tlsCert != "" {
+			err = server.ServeTLS(lis, s.tlsCert, s.tlsKey)
 		} else {
 			err = server.Serve(lis)
 		}
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatal(err)
+			serveErr <- err
 		}
 	}()
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	got := <-sig
-	log.Printf("%s: draining for up to %s", got, *shutdown)
-	ctx, cancel := context.WithTimeout(context.Background(), *shutdown)
+	select {
+	case err := <-serveErr:
+		_ = nd.Close()
+		return err
+	case got := <-sig:
+		slog.Info("draining", "signal", got.String(), "timeout", s.shutdown)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), s.shutdown)
 	defer cancel()
 	_ = server.Shutdown(ctx)
 	if err := nd.Close(); err != nil {
-		log.Printf("close: %v", err)
+		slog.Warn("close", "err", err)
 	}
+	return nil
 }
 
 // applyEnv seeds each flag's default from ATHANOR_<NAME> when set, so
 // `--public-url` can come from ATHANOR_PUBLIC_URL and so on. Explicit flags
-// still override, because flag.Parse runs afterwards.
-func applyEnv() {
-	flag.VisitAll(func(f *flag.Flag) {
-		name := "ATHANOR_" + strings.ToUpper(strings.ReplaceAll(f.Name, "-", "_"))
-		if v, ok := os.LookupEnv(name); ok && v != "" {
-			if err := f.Value.Set(v); err != nil {
-				log.Fatalf("%s=%q: %v", name, v, err)
-			}
+// still override, because Parse runs afterwards.
+func applyEnv(fs *flag.FlagSet, lookup func(string) (string, bool)) error {
+	var err error
+	fs.VisitAll(func(f *flag.Flag) {
+		name := envName(f.Name)
+		v, ok := lookup(name)
+		if !ok || v == "" || err != nil {
+			return
+		}
+		if setErr := f.Value.Set(v); setErr != nil {
+			err = fmt.Errorf("%s=%q: %w", name, v, setErr)
 		}
 	})
+	return err
+}
+
+// envName is the ATHANOR_* variable that backs a flag.
+func envName(flagName string) string {
+	return "ATHANOR_" + strings.ToUpper(strings.ReplaceAll(flagName, "-", "_"))
 }
 
 func seedList(raw string) []string {
